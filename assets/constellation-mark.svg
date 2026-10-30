@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">Constellation original emblem</title>
+  <rect width="512" height="512" rx="128" fill="#203c32"/>
+  <g stroke="#b5d2ba" stroke-width="10" stroke-linecap="round" opacity=".9">
+    <path d="M148 304 254 170 375 273 278 366 148 304" fill="none"/>
+    <path d="m254 170 24 196"/>
+  </g>
+  <g fill="#e1ede0">
+    <circle cx="148" cy="304" r="23"/><circle cx="254" cy="170" r="28"/>
+    <circle cx="375" cy="273" r="20"/><circle cx="278" cy="366" r="21"/>
+  </g>
+  <g fill="#d4ad82"><circle cx="118" cy="165" r="9"/><circle cx="385" cy="141" r="11"/><circle cx="403" cy="362" r="7"/></g>
+</svg>

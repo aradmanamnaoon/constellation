@@ -1,0 +1,29 @@
+# Build artifacts and caches are never source-controlled.
+**/target/
+**/node_modules/
+**/.svelte-kit/
+**/build/
+**/dist/
+**/.vite/
+
+# Local runtime state and secrets.
+*.sqlite
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.db
+*.pem
+*.p12
+*.pfx
+.env
+.env.*
+!.env.example
+**/coverage/
+**/playwright-report/
+**/test-results/
+*.log
+
+# The automated NSIS validation installs into a private, local QA directory.
+# Never stage installed binaries, sample workspace data or uninstallers.
+/qa-installed/
+/qa-*/

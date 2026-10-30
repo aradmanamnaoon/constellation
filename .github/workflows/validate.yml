@@ -1,0 +1,90 @@
+name: Validate Constellation
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    name: Rust core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/constellation-core
+      - name: Format
+        run: cargo fmt --manifest-path crates/constellation-core/Cargo.toml --all --check
+      - name: Strict Clippy
+        run: cargo clippy --manifest-path crates/constellation-core/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Unit and integration tests
+        run: cargo test --manifest-path crates/constellation-core/Cargo.toml --all-targets --locked
+
+  frontend:
+    name: Svelte checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      - run: pnpm run build
+
+  tool-library-and-catalog:
+    name: Tool library and catalogue validation
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: cargo test --manifest-path crates/constellation-tools/Cargo.toml --locked
+      - run: cargo clippy --manifest-path crates/constellation-tools/Cargo.toml --all-targets --locked -- -D warnings
+      - run: node --test catalog/roles.test.mjs
+      - run: node skills-manifest/validate.mjs
+      - run: node --test skills-manifest/validate.test.mjs
+
+  desktop-windows-check:
+    name: Windows native compile
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/desktop/src-tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - name: Check Tauri application
+        run: cargo check --locked
+
+# This workflow validates source on hosted runners. It is NOT evidence of
+# installed application GUI testing, macOS/Android signed binaries, or release.
