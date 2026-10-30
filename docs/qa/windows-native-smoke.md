@@ -1,5 +1,36 @@
 # Windows native smoke verification — 2026-10-30
 
+## Latest Windows text-task hardening package — fixed source identity
+
+After the installed text-task smoke recorded below, a targeted native backend
+change introduced a 64 KiB request-history cap and updated cancellation logic.
+The corresponding **source commit** was
+`c878520e4921dc08a0a444c501b6e01d092aaae2`.
+The project then compiled a new x64 NSIS bundle in Cargo offline mode, and
+installed that same installer to an isolated QA location.
+
+| Verification | Observed outcome |
+| --- | --- |
+| Native Rust | `cargo fmt --all --check`, `cargo test --offline --lib` (13 passing), `cargo clippy --all-targets --offline -- -D warnings` passed |
+| Latest build | `CARGO_NET_OFFLINE=true pnpm tauri build --bundles nsis`, release build and NSIS packaging exit 0 |
+| Installer bytes | 2,990,183 |
+| Installer SHA-256 | `3eef254bd03fa754e0f9a4d778744eab8f4255fe3a7c26da42b33596c4e66f19` |
+| Isolated NSIS install | `qa-installed-final-c878520` destination, `/S /D=<destination>`, exit 0 |
+| Installed executable bytes | 8,109,568 |
+| Installed executable SHA-256 | `7951eefe0d2b0844257cfdff2be27ddd7d0135c886a45a85c7c90e59a3685dcf` |
+| Digital signature | Authenticode `NotSigned` |
+| Installed launch | Native `Constellation` window, PID 10436, HWND 2296318, WebView2 UIA tree populated with 136 descendants |
+| Persisted workspace | Existing room `QA Room Oct 30` and both Researcher and Literature Scout remained visible |
+| Text-task controls | Tasks view exposed `Model for task execution` ComboBox and persisted Succeeded/Cancelled task states |
+
+This **latest installer** passed compilation, local silent installation,
+launch and basic task UI smoke. Task cancellation **during a real outstanding
+network call** was tested with Rust unit regressions but has not been
+independently exercised in this specific installed executable. The text task
+only generates model text and does not execute OS tools. Signing, macOS,
+Linux, Android, live provider billing/privacy and secure sandbox claims all
+remain unverified. The earlier installer identities below are historical.
+
 ## Final source-identified 200-role Windows installer
 
 The most recent local **experimental** NSIS installer was rebuilt after the

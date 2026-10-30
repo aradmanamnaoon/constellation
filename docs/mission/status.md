@@ -12,6 +12,13 @@ See [the exact installer hash, installed executable hash, NotSigned status and
 native UIA search evidence](../qa/windows-native-smoke.md). This is local
 reproducibility evidence, not a public GitHub release.
 
+**Subsequent hardened task revision:** source commit
+`c878520e4921dc08a0a444c501b6e01d092aaae2` adds input bounds and
+task-cancellation handling. Its own x64 NSIS installer was built offline,
+installed and smoke-tested. The latest installer is the 2,990,183-byte file
+with SHA-256 `3eef254bd03fa754e0f9a4d778744eab8f4255fe3a7c26da42b33596c4e66f19`.
+See the dated QA record for the corresponding installed executable identity.
+
 ## Verified work
 
 - Original custom Tauri2/Svelte5 desktop app with Rust domain and native IPC.
