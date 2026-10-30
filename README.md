@@ -8,8 +8,8 @@ The screenshot is from a real Windows Tauri/WebView2 development build. The
 two-agent response test used a deterministic localhost fixture, **not an AI
 model**, and is documented with [actual Windows GUI evidence](docs/qa/windows-native-smoke.md).
 
-> **Development status: early vertical slice, not a production release.** The
-> requested 200 functional role templates, 200 vetted development integrations,
+> **Development status: functional prototype, not a production release.** The
+> requested 200 role definitions are present, while the 200 vetted development integrations,
 > secured coding execution, Android APK, remote runner, encrypted sync,
 > cross-platform installers, full platform testing, and public releases have
 > **not** been delivered. An experimental local Windows NSIS installer was
@@ -24,8 +24,11 @@ model**, and is documented with [actual Windows GUI evidence](docs/qa/windows-na
 - **Explicit, attributed team chat:** save a message locally first, then choose
   a model provider and ask one or up to eight selected agents. Per-agent
   success/partial-failure is visible; retry skips already-saved responses.
-- **Pending task planner:** record and cancel tasks with honest **Not Executed**
-  labels. No autonomous executor is wired into the desktop app yet.
+- **Explicit text-only task runner:** record a task, choose a model, and run
+  it on demand. The model's result is stored in the room with an atomic
+  succeeded task state. Cancellation interrupts an in-flight response, and
+  restarts mark unverified requests failed. OS tools and automatic coding
+  execution remain unavailable in the desktop app.
 - Copy a single room's attributed transcript as Markdown without sending it to
   a model or writing a file silently.
 - A fully Rust-owned persistence crate (`crates/constellation-core`) with
@@ -42,7 +45,7 @@ model**, and is documented with [actual Windows GUI evidence](docs/qa/windows-na
   the explicitly selected provider **only after the user clicks Ask**.
   Provider/tool capability negotiation and live-provider certification remain open.
 - An offline system-font, compact and responsive interface with keyboard
-  navigation and a visibly disabled browser-only preview.
+  navigation, paginated chat history and a disabled browser-only preview.
 
 ## Install and explore
 
@@ -58,6 +61,12 @@ Begin with the illustrated-style [getting-started guide](docs/getting-started.md
 and [provider/privacy notes](docs/providers.md). You can create a room and save
 messages **without a model account**; remote inference may cost money and sends
 the chosen room content to the remote provider.
+
+To run a task, visit **Tasks**, create a plan assigned to an agent, select the
+configured model in **Model for task execution**, then press **Run text task**.
+The selected model receives the task instructions only. It cannot operate on
+your files or run processes through this feature. A real installed Windows
+fixture exercise is recorded in [native QA](docs/qa/windows-native-smoke.md).
 
 ## Develop
 

@@ -10,7 +10,9 @@ Mark features implemented only after tested behavior with actual evidence.
 - User-selected 1–8 agents for sequential responses, per-agent outcomes,
   duplicate suppression and an explicit network egress decision.
 - 200 distinct prompt-only chat-role instructions; no tool permissions conferred.
-- Persisted planning/cancellation of tasks, with no execution claim.
+- Persisted tasks with explicit, selected-model text execution and atomic
+  result/terminal state, validated through a Windows installed fixture run;
+  coding tools are still unavailable through the GUI.
 - Markdown transcript export as a read-only/copy action.
 - Windows local NSIS installer build and installation smoke for the earlier
   milestone; latest source requires a refreshed installed-build acceptance.

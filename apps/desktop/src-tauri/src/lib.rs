@@ -13,6 +13,8 @@ use constellation_core::{
     ProviderProfile, RoomId, StudioSnapshot, StudioStore, Task, TaskId, TaskState,
     export_room_markdown,
 };
+use futures_util::future::{Either, select};
+use futures_util::pin_mut;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tauri::{Manager, State};
@@ -727,6 +729,23 @@ fn provider_client() -> Result<reqwest::Client, String> {
         .map_err(|_| "Unable to initialize the provider connection".into())
 }
 
+/// A bounded prompt size is an upper limit on accidental data egress and
+/// token expense. Provider tokenization varies; this is a byte cap, not a
+/// claimed token or currency budget.
+fn validate_model_history(history: &[ChatEntry]) -> Result<(), String> {
+    const MAX_INPUT_BYTES: usize = 64 * 1024;
+    let total = history
+        .iter()
+        .try_fold(0usize, |sum, entry| sum.checked_add(entry.content.len()));
+    if history.is_empty() || total.is_none_or(|bytes| bytes > MAX_INPUT_BYTES) {
+        return Err(
+            "Model input exceeds the 64 KiB limit; shorten the task or room history before asking"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 /// Bounded provider transport. Only safe, explicit transient failures retry;
 /// network timeouts do not, because the remote server might have billed the
 /// initial request. No provider response bodies, URLs or credentials enter
@@ -737,6 +756,7 @@ async fn model_text_reply(
     key: Option<&str>,
     history: Vec<ChatEntry>,
 ) -> Result<String, String> {
+    validate_model_history(&history)?;
     let adapter = OpenAiCompatibleAdapter::new(profile.clone())
         .map_err(|_| "Invalid provider configuration")?;
     let prepared = adapter
@@ -1039,20 +1059,28 @@ async fn studio_run_task(
             None,
         )
         .map_err(err)?;
-    let response = tokio::select! {
-        biased;
-        signal = cancellation.changed() => {
-            if signal.is_ok() && *cancellation.borrow_and_update() {
-                return Err("Task cancelled; the model response was discarded".into());
+    let reply = model_text_reply(
+        &client,
+        &provider,
+        credential.as_deref().map(String::as_str),
+        history,
+    );
+    let cancelled = async {
+        loop {
+            if *cancellation.borrow() {
+                break;
             }
-            return Err("Task request was interrupted; no completion was recorded".into());
+            if cancellation.changed().await.is_err() {
+                break;
+            }
         }
-        reply = model_text_reply(
-            &client,
-            &provider,
-            credential.as_deref().map(String::as_str),
-            history,
-        ) => reply,
+    };
+    pin_mut!(reply, cancelled);
+    let response = match select(reply, cancelled).await {
+        Either::Left((reply, _)) => reply,
+        Either::Right(((), _)) => {
+            return Err("Task was cancelled or interrupted; no model response was saved".into());
+        }
     };
     match response {
         Ok(text) => {
@@ -1130,10 +1158,10 @@ fn studio_cancel_task(
             None,
         )
         .map_err(err)?;
-    if let Ok(signals) = state.task_cancellations.lock() {
-        if let Some(sender) = signals.get(&task_id) {
-            let _ = sender.send(true);
-        }
+    if let Ok(signals) = state.task_cancellations.lock()
+        && let Some(sender) = signals.get(&task_id)
+    {
+        let _ = sender.send(true);
     }
     serde_json::to_value(task).map_err(err)
 }
@@ -1326,6 +1354,42 @@ mod tests {
         assert!(reserve_reply(&active, other_room).is_ok());
         drop(lease);
         assert!(reserve_reply(&active, room_id).is_ok());
+    }
+
+    #[test]
+    fn cancellation_signal_is_bound_to_one_active_task_and_released() {
+        let signals = Mutex::new(HashMap::new());
+        let task_a = TaskId::new();
+        let task_b = TaskId::new();
+        let (lease_a, mut receiver_a) = register_task_request(&signals, task_a).unwrap();
+        assert!(register_task_request(&signals, task_a).is_err());
+        let (lease_b, receiver_b) = register_task_request(&signals, task_b).unwrap();
+        assert!(!*receiver_b.borrow());
+        {
+            let active = signals.lock().unwrap();
+            active.get(&task_a).unwrap().send(true).unwrap();
+        }
+        assert!(*receiver_a.borrow_and_update());
+        assert!(!*receiver_b.borrow());
+        drop(lease_a);
+        assert!(signals.lock().unwrap().get(&task_a).is_none());
+        assert!(register_task_request(&signals, task_a).is_ok());
+        drop(lease_b);
+    }
+
+    #[test]
+    fn oversized_context_is_rejected_before_any_provider_dispatch() {
+        assert!(validate_model_history(&[]).is_err());
+        let small = vec![ChatEntry {
+            role: ChatRole::User,
+            content: "hello".into(),
+        }];
+        assert!(validate_model_history(&small).is_ok());
+        let large = vec![ChatEntry {
+            role: ChatRole::User,
+            content: "x".repeat(64 * 1024 + 1),
+        }];
+        assert!(validate_model_history(&large).is_err());
     }
 
     #[test]
