@@ -1,5 +1,65 @@
 # Windows native smoke verification — 2026-10-30
 
+## Final source-identified 200-role Windows installer
+
+The most recent local **experimental** NSIS installer was rebuilt after the
+role catalogue reached 200 prompt-only roles. The source tree was committed
+before this build at `b229c5f1461d4455f1a1d41b6ff46e870e89ddd1`.
+Only documentation/screenshot additions followed the build; application
+sources were not changed for this QA record.
+
+| Verification | Direct observation |
+| --- | --- |
+| Build command | `CARGO_NET_OFFLINE=true pnpm tauri build --bundles nsis`, Windows x64; release profile and NSIS bundle succeeded |
+| Installer path | `apps/desktop/src-tauri/target/release/bundle/nsis/Constellation_0.1.0_x64-setup.exe` |
+| Installer size | 2,989,552 bytes |
+| Installer SHA-256 | `3bd269a55b3764d4005fa93a2c8bd31301a98c5cb13a52f1027fd93fbc9953eb` |
+| Silent installation | Isolated `qa-installed-200` destination, NSIS `/S /D=<destination>`, exit code 0 |
+| Installed executable size | 8,110,080 bytes |
+| Installed executable SHA-256 | `7f146e07163085373c3e17f11d88c6aa44dc8f14e5fe465c922a61f65d4e99aa` |
+| Authenticode | `NotSigned` — the file is **not a trusted public release** |
+| Installed native window | PID 24316, nonzero HWND 3804242, `Constellation` title |
+| 200-role library | PASS (installed Windows WebView2): Library exposed `Policy Brief Writer` (last role) and `Literature Scout` (first role); empty-search UIA had 1,048 descendants |
+| Accessible role search | PASS (installed Windows): entered `Policy Brief Writer` into the real `Search agent roles` edit control; input value matched; filtered UIA shrank to 53 elements, showed `Policy Brief Writer`, and no longer showed `Literature Scout` |
+| Role privilege disclosure | PASS (visible text): `200 distinct prompt-only roles` and explicit warning that tool-enabled agents are not yet complete and roles confer no tools |
+
+The real [200-role installed library screenshot](screenshots/windows-200-role-search-installed.png)
+shows the filtered result and the prompt-only disclosure. **No real AI model,
+autonomous tool execution, security sandbox, signed update or cross-platform
+installer is validated by this role test.**
+
+The earlier installer records below are retained for historical comparison.
+Their checksums refer to *different local binaries with the same 0.1.0 version*
+and should not be treated as current downloads.
+
+## Installed text-task execution acceptance — third QA pass
+
+This additional smoke ran on an isolated local NSIS installation against
+the deterministic loopback `tests/fixtures/mock-openai.mjs`. The mock is
+**not a live AI model** and never executes any shell or filesystem tools.
+
+| Test | Direct observation |
+| --- | --- |
+| Windows x64 unsigned NSIS build | `pnpm tauri build --bundles nsis` exited 0, producing `Constellation_0.1.0_x64-setup.exe` |
+| Installer SHA-256 | `309676af5a6e711640959502e22776f3a9f4db2ac5b3c1617588d6a58a8e0b7f` |
+| Isolated NSIS installation | `/S /D=D:\coding\codex\constellation\qa-installed-task` exited 0; executable present, 8,100,352 bytes |
+| Installed executable SHA-256 | `bfc75e304cd47890d8ce7ff1de653ebab9f0998604d6569916f7a0029b54e555` |
+| Actual installed GUI | Windows WebView2 UI Automation, process 23304, HWND 3214454, window title Constellation |
+| Task planning | UIA invoked Tasks → Plan task, set instructions to `FIXTURE TASK: Return a short acknowledgement. No filesystem or shell actions.`, then Save pending task |
+| Pending state | Actual installed UI displayed the task instructions, Pending, Model for task execution selector, and a Run text task button |
+| Explicit model selection | UIA selected `Contract fixture not AI · fixture-model · http://127.0.0.1:18767/v1` in the task-provider ComboBox; Run text task became enabled |
+| Request and persistence | UIA invoked Run text task; UI displayed Succeeded and `Model task finished. Its response is saved in the associated room.` |
+| Attributed room result | UIA opened Rooms and found `[FIXTURE ONLY] The local test server received your request.` in the chat, with agent attribution |
+
+This pass observed the installed app and live loopback HTTP transport, not
+just a browser preview, static build, or unit mock. The installation used
+the same existing QA SQLite profile as earlier tests; fresh-profile and
+upgrade/migration acceptance remain open. After this installer was produced,
+the source added per-task network request cancellation using a watched
+signal; **that later source revision is unit-tested but is not covered by
+this installer identity**. A new fixed-revision installer build and
+cancellation-specific installed test remain necessary.
+
 ## Updated multi-agent Windows installer — second QA pass
 
 The original 0.1.0 installer below was superseded **locally** by a new unsigned

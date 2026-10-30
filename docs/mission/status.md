@@ -5,6 +5,13 @@ vertical slice, **NOT the full requested mission**, NOT production secure,
 NOT yet publicly published. The spec remains the original attached
 `Codex_Master_Prompt_Local_Agent_Collaboration_Platform.md` (1,237 lines).
 
+**Source build identity:** local implementation commit
+`b229c5f1461d4455f1a1d41b6ff46e870e89ddd1`. Its Windows NSIS artifact
+was built successfully and installed after the 200-role catalogue expansion.
+See [the exact installer hash, installed executable hash, NotSigned status and
+native UIA search evidence](../qa/windows-native-smoke.md). This is local
+reproducibility evidence, not a public GitHub release.
+
 ## Verified work
 
 - Original custom Tauri2/Svelte5 desktop app with Rust domain and native IPC.
@@ -15,12 +22,14 @@ NOT yet publicly published. The spec remains the original attached
 - Two-agent group-chat path tested by Windows GUI automation with a labelled
   localhost **mock** provider: each selected agent replied once to the same
   new user prompt, and a repeated request skipped stored replies.
-- Task creation/cancellation tested through real GUI: pending and cancelled
-  states explicitly said **Not Executed**; no tool runner exists.
+- Task creation, selected-model text execution and persisted result tested
+  through the real installed Windows GUI using a labelled loopback fixture.
+  Atomic task completion, cancellation and interrupted-request recovery are
+  protected by Rust store tests. No OS coding-tool execution is wired.
 - 200 prompt-only role specialties (42 foundational and 158 expanded), with
   substantive output expectations and deterministic validation tests;
   prompt guidance embedded in native request system instructions; NO role tool
-  grants or agent task execution.
+  grants or autonomous coding execution.
 - Read-only Markdown room export: unit tests and Tauri IPC code. Direct GUI
   clipboard behavior remains separately testable.
 - Separate experimental filesystem/command/Git effect library with permission
@@ -60,7 +69,7 @@ bundles, then debug output was relocated to the C: temporary directory with
 
 ## Major work remaining
 
-Permissioned task execution, production provider tests and costs, prompts
+Permissioned OS-tool task execution, production provider tests and costs, prompts
 and MCP tool policy/role permission boundaries, file attachment/citation
 flow, OS sandbox, encrypted backup/sync, runner, Android, cross-platform
 packages and signing, security audit, 200 verified roles, 200 verified
