@@ -271,6 +271,29 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm exec tauri build --bundles nsis
+      - name: Hash Windows diagnostic build and exercise offline payload negative tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = @(Get-ChildItem apps/desktop/src-tauri/target/release/bundle/nsis -Filter '*setup.exe' -File)
+          $binary = 'apps/desktop/src-tauri/target/release/constellation-desktop.exe'
+          $nsi = @(Get-ChildItem apps/desktop/src-tauri/target/release/nsis -Filter 'installer.nsi' -Recurse -File)
+          if ($setup.Count -ne 1 -or $nsi.Count -ne 1 -or -not (Test-Path $binary)) { throw 'Missing/ambiguous NSIS diagnostic inputs' }
+          Get-FileHash $setup[0].FullName -Algorithm SHA256
+          Get-FileHash $binary -Algorithm SHA256
+          Get-FileHash $nsi[0].FullName -Algorithm SHA256
+          node --test tests/windows-nsis-payload-provenance-20261101.test.mjs
+      # Upload only to PRIVATE diagnostic Actions artifacts; never to a Release.
+      # This must run before the deliberately fail-closed installed-identity gate.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-nsis-unsigned-uninstalled-unverified
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/nsis/*setup.exe
+            apps/desktop/src-tauri/target/release/constellation-desktop.exe
+            apps/desktop/src-tauri/target/release/nsis/**/installer.nsi
+          if-no-files-found: error
+          retention-days: 7
       - name: Inspect NSIS payload identity without installing on the runner
         shell: pwsh
         run: |
@@ -282,12 +305,6 @@ jobs:
           if ($nsi.Count -ne 1) { throw 'Missing/ambiguous installer source identity' }
           ./tests/windows-bundle-identity.ps1 -InstallerPath $setup[0].FullName -DirectExePath $binary -NsisScriptPath $nsi[0].FullName
           Get-FileHash $setup[0].FullName -Algorithm SHA256
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: windows-nsis-unsigned-unverified
-          path: apps/desktop/src-tauri/target/release/bundle/nsis/*setup.exe
-          if-no-files-found: error
-          retention-days: 7
 
   desktop-macos-arm:
     needs: [source-manifest, frontend-check]
@@ -445,18 +462,20 @@ jobs:
           test "${#apks[@]}" -eq 1
           file "${apks[0]}"
           sha256sum "${apks[0]}"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "${apks[0]}" > "$RUNNER_TEMP/constellation-android-debug-signer.txt"
+          grep -Eq '^Signer #1 certificate DN: .*CN=Android Debug' "$RUNNER_TEMP/constellation-android-debug-signer.txt"
           mkdir -p target/android-diagnostic
           cp -- "${apks[0]}" target/android-diagnostic/Constellation-arm64-debug-unverified.apk
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: android-arm64-debug-apk-unsigned-uninstalled-unverified
+          name: android-arm64-debug-apk-nonrelease-uninstalled-unverified
           path: target/android-diagnostic/Constellation-arm64-debug-unverified.apk
           if-no-files-found: error
           retention-days: 7
-      - name: Refuse unsigned/uninstalled Android release without verified Android project and keystore
+      - name: Refuse production Android release without installed-device acceptance and release signing
         shell: bash
         run: |
-          echo 'Diagnostic debug APK is NOT a signed release artifact.'
+          echo 'Diagnostic APK is debug-signed and NOT a production release-signed artifact.'
           echo 'Android ARM64 release keystore, emulator ADB install and resume smoke are not configured.'
           echo 'No signing credentials were provided; refusing to mark the Android family passed.'
           exit 1

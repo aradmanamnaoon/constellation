@@ -60,3 +60,12 @@ test('mutated Android identifier or unexpectedly broadened permissions are rejec
   );
   assert.doesNotMatch(gradle, /applicationId\s*=\s*"app\.constellation\.studio"/);
 });
+
+test('Android debug APK is explicitly nonrelease and requires its debug signer to be verified', () => {
+  const workflow = readFileSync(path.join(root, '.github/workflows/acceptance.yml'), 'utf8');
+  assert.match(workflow, /android-arm64-debug-apk-nonrelease-uninstalled-unverified/);
+  assert.match(workflow, /apksigner" verify --verbose --print-certs/);
+  assert.match(workflow, /CN=Android Debug/);
+  assert.match(workflow, /Refuse production Android release without installed-device acceptance and release signing/);
+  assert.match(workflow, /No signing credentials were provided; refusing to mark the Android family passed/);
+});
