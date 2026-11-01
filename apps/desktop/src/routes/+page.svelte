@@ -9,6 +9,10 @@
     Cpu, BookOpen, FileSearch, Maximize2, Minimize2,
   } from '@lucide/svelte';
   import roleCatalog from '../../../../catalog/roles.json';
+  import WorkspaceCommandPalette from '../lib/WorkspaceCommandPalette.svelte';
+  import { filterWorkspaceRooms, type WorkspaceAction } from '../lib/workspace-navigation';
+  import { filterRoleLibrary, roleCategories } from '../lib/role-library';
+  import { splitChatBlocks } from '../lib/chat-format';
   import './studio.css';
 
   type Screen = 'home' | 'rooms' | 'tasks' | 'evidence' | 'library' | 'settings';
@@ -125,6 +129,9 @@
   let newAgent = $state('');
   let selectedRole = $state(starterRoles[0]?.name ?? '');
   let search = $state('');
+  let roleCategory = $state('All');
+  let rolePageSize = $state(24);
+  let roomSearch = $state('');
   let providerName = $state('Custom provider');
   let providerKind = $state<ProviderKind>('custom_compatible');
   let providerEndpoint = $state('http://127.0.0.1:11434/v1');
@@ -135,8 +142,12 @@
   let probeResults = $state<Record<string, ProviderProbe | { status: 'request_error'; message: string }>>({});
   let taskRoomId = $state('');
   let taskFilterRoomId = $state('');
+  let taskSearch = $state('');
+  let taskStatusFilter = $state<'all' | 'open' | 'done' | 'attention'>('all');
+  let taskProviders = $state<Record<string, string>>({});
   let taskAgentId = $state('');
   let taskInstructions = $state('');
+  let taskSetupReturn = $state<'new-room' | 'new-agent' | null>(null);
   let tasksView = $state<'tasks' | 'workflows'>('tasks');
   let runningTaskId = $state('');
   let taskCancelConfirmation = $state('');
@@ -239,12 +250,17 @@
   // Bound the number of mounted message nodes even in very large rooms.
   const messagePageSize = 100;
   let messagePage = $state(0);
+  let messageQuery = $state('');
 
   const room = $derived(snapshot.rooms.find((r) => r.id === roomId));
   const messages = $derived(snapshot.messages.filter((m) => m.room_id === roomId));
-  const maxMessagePage = $derived(Math.max(0, Math.ceil(messages.length / messagePageSize) - 1));
-  const visibleMessageEnd = $derived(Math.max(0, messages.length - Math.min(messagePage, maxMessagePage) * messagePageSize));
-  const visibleMessages = $derived(messages.slice(Math.max(0, visibleMessageEnd - messagePageSize), visibleMessageEnd));
+  const matchingMessages = $derived(messages.filter((message) => {
+    const query = messageQuery.trim().toLocaleLowerCase();
+    return !query || `${message.sender_name} ${message.body}`.toLocaleLowerCase().includes(query);
+  }));
+  const maxMessagePage = $derived(Math.max(0, Math.ceil(matchingMessages.length / messagePageSize) - 1));
+  const visibleMessageEnd = $derived(Math.max(0, matchingMessages.length - Math.min(messagePage, maxMessagePage) * messagePageSize));
+  const visibleMessages = $derived(matchingMessages.slice(Math.max(0, visibleMessageEnd - messagePageSize), visibleMessageEnd));
   const selectedAgentIds = $derived((selectedAgentsByRoom[roomId] ?? snapshot.agents.slice(0, 1).map((agent) => agent.id)).filter((id) => snapshot.agents.some((agent) => agent.id === id)));
   const selectedProvider = $derived(snapshot.providers.find((provider) => provider.id === selectedProviderId));
   const providerPreset = $derived(providerPresets[providerKind]);
@@ -264,6 +280,19 @@
   // most recent user prompt; don't strand failed teammates behind this gate.
   const canAsk = $derived(isNative && !busy && !replyBusy && !!roomId && (!!selectedProvider || (usingAgentProviders && assignedProvidersReady)) && selectedAgentIds.length > 0 && messages.some((message) => message.sender_kind === 'user'));
   const roomTasks = $derived(snapshot.tasks.filter((task) => !taskFilterRoomId || task.room_id === taskFilterRoomId).slice().reverse());
+  const homeRooms = $derived(snapshot.rooms.slice(-5).reverse());
+  const homeOpenTasks = $derived(snapshot.tasks.filter((task) => ['pending', 'queued', 'running'].includes(task.state)).slice(-4).reverse());
+  const visibleRoomTasks = $derived(roomTasks.filter((task) => {
+    const term = taskSearch.trim().toLocaleLowerCase();
+    const agent = snapshot.agents.find((item) => item.id === task.agent_id);
+    const inSearch = !term || [task.instructions, agent?.name ?? '', agent?.role ?? '']
+      .some((item) => item.toLocaleLowerCase().includes(term));
+    const inStatus = taskStatusFilter === 'all'
+      || (taskStatusFilter === 'open' && ['pending', 'queued', 'running'].includes(task.state))
+      || (taskStatusFilter === 'done' && task.state === 'succeeded')
+      || (taskStatusFilter === 'attention' && ['failed', 'cancelled'].includes(task.state));
+    return inSearch && inStatus;
+  }));
   const taskCounts = $derived({
     total: roomTasks.length,
     awaiting: roomTasks.filter((task) => task.state === 'pending' || task.state === 'queued').length,
@@ -278,7 +307,10 @@
     }))
   }));
   const workflowPreviewCurrent = $derived(!!workflowPreview && !!validatedWorkflowJson && validatedWorkflowSignature === workflowSignature);
-  const filteredRoles = $derived(starterRoles.filter((role) => [role.name,role.blurb,role.group].join(' ').toLowerCase().includes(search.toLowerCase())));
+  const roleGroups = roleCategories(starterRoles);
+  const filteredRoles = $derived(filterRoleLibrary(starterRoles, search, roleCategory));
+  const visibleRoles = $derived(filteredRoles.slice(0, rolePageSize));
+  const filteredRooms = $derived(filterWorkspaceRooms(snapshot.rooms, roomSearch));
 
   function timeDisplay(value: number | string): string {
     // Rust serializes created_at_ms as a number; historical ISO strings also work.
@@ -323,7 +355,14 @@
     try {
       const created = await invoke<Room>('studio_create_room', { title: newRoom.trim() });
       newRoom = '';
-      await refresh(); selectRoom(created.id); dialog = null; screen = 'rooms';
+      await refresh(); selectRoom(created.id);
+      if (taskSetupReturn === 'new-room') {
+        taskRoomId = created.id;
+        taskSetupReturn = null;
+        dialog = 'new-task';
+        await focusCurrentDialogField();
+        notice = 'Room created. Continue planning your task.';
+      } else { dialog = null; screen = 'rooms'; }
     } catch (cause) { error = String(cause); }
     finally { working = false; }
   }
@@ -332,9 +371,19 @@
     if (!isNative) return;
     working = true; error = '';
     try {
+      const beforeIds = new Set(snapshot.agents.map((agent) => agent.id));
       await invoke('studio_add_agent', { role: roleName, name: name.trim() || roleName });
-      await refresh(); dialog = null; screen = 'rooms';
-      notice = `${name.trim() || roleName} added. Choose a provider before asking this agent to reply.`;
+      await refresh();
+      if (taskSetupReturn === 'new-agent') {
+        taskAgentId = snapshot.agents.find((agent) => !beforeIds.has(agent.id))?.id ?? taskAgentId;
+        taskSetupReturn = null;
+        dialog = 'new-task';
+        await focusCurrentDialogField();
+        notice = 'Agent created. Continue planning your task.';
+      } else {
+        dialog = null; screen = 'rooms';
+        notice = `${name.trim() || roleName} added. Choose a provider before asking this agent to reply.`;
+      }
     } catch (cause) { error = String(cause); }
     finally { working = false; }
   }
@@ -381,6 +430,7 @@
       draft = draftsByRoom[nextId] ?? '';
       roomId = nextId;
       messagePage = 0;
+      messageQuery = '';
       // Explicitly reconfirm the recipient model for each new room. Keeping
       // the previous room's selected provider could export unrelated history.
       selectedProviderId = '';
@@ -594,6 +644,20 @@
       providerRememberKey = false;
     }
     dialog = null;
+    taskSetupReturn = null;
+  }
+  async function focusCurrentDialogField() {
+    await tick();
+    document.querySelector<HTMLElement>('.modal input:not([disabled]), .modal select:not([disabled])')?.focus();
+  }
+
+  async function copyMessageText(content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+      notice = 'Message text copied. Nothing was sent to an AI provider.';
+    } catch (cause) {
+      error = `Could not copy message text: ${String(cause)}`;
+    }
   }
 
   async function copyTranscript() {
@@ -1830,6 +1894,7 @@
   }
 
   function openTaskDialog(preferredRoomId?: string) {
+    taskSetupReturn = null;
     taskRoomId = preferredRoomId || taskFilterRoomId || roomId || snapshot.rooms[0]?.id || '';
     taskAgentId = (selectedAgentsByRoom[taskRoomId] ?? selectedAgentIds)[0] || snapshot.agents[0]?.id || '';
     taskInstructions = '';
@@ -1893,29 +1958,60 @@
 
   function taskProviderId(task: StudioTask): string {
     const agent = snapshot.agents.find((entry) => entry.id === task.agent_id);
-    const id = usingAgentProviders ? agent?.provider_id : selectedProviderId;
+    // A task's explicitly selected model cannot silently change when the user
+    // switches chat rooms or changes the model for another task.
+    const choice = taskProviders[task.id] ?? '';
+    const id = choice === 'each-agent' ? agent?.provider_id : choice;
     return id && snapshot.providers.some((profile) => profile.id === id) ? id : '';
   }
 
   function keyboard(event: KeyboardEvent) {
     if (event.isComposing || event.keyCode === 229) return;
+    const target = event.target;
+    const editing = target instanceof HTMLElement && !!target.closest('input, textarea, select, [contenteditable="true"]');
+    if (!dialog && !editing && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
+      const sections: Screen[] = ['home', 'rooms', 'tasks', 'evidence', 'library', 'settings'];
+      const index = Number(event.key) - 1;
+      if (Number.isInteger(index) && index >= 0 && index < sections.length) {
+        event.preventDefault();
+        navigate(sections[index]);
+        return;
+      }
+      if (event.key === ',') {
+        event.preventDefault();
+        navigate('settings');
+        return;
+      }
+    }
     if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'f' && screen === 'rooms' && !dialog) {
       event.preventDefault();
       focusMode = !focusMode;
       if (focusMode) { showDetails = false; sidebarOpen = false; }
       return;
     }
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); dialog = 'commands'; }
+    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      // Do not discard another modal's unsaved form state or move focus to a
+      // newly replaced field inside the same dialog node.
+      if (!dialog) dialog = 'commands';
+      if (!dialog || dialog === 'commands') void focusCurrentDialogField();
+      return;
+    }
     if (event.key === 'Escape') {
       if (dialog) closeDialog();
       else if (focusMode) focusMode = false;
-      else showDetails = false;
+      else if (sidebarOpen) {
+        sidebarOpen = false;
+        document.querySelector<HTMLButtonElement>('.mobile-menu')?.focus();
+      } else showDetails = false;
     }
   }
 
   function focusDialog(node: HTMLElement) {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const selector = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    // Palette options are controlled by aria-activedescendant and intentionally
+    // tabindex=-1; they must not be counted as Tab stops in the modal trap.
+    const selector = 'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
     (node.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), .command-list button') ?? node.querySelector<HTMLElement>(selector))?.focus();
     function trapTab(event: KeyboardEvent) {
       if (event.key !== 'Tab') return;
@@ -1937,6 +2033,19 @@
     closeDialog();
     sidebarOpen = false;
   }
+  function openCommandAction(action: WorkspaceAction) {
+    dialog = action;
+    void focusCurrentDialogField();
+  }
+  function continueTaskSetup(action: 'new-room' | 'new-agent') {
+    taskSetupReturn = action;
+    dialog = action;
+    void focusCurrentDialogField();
+  }
+  function openCommandRoom(id: string) {
+    selectRoom(id);
+    navigate('rooms');
+  }
 </script>
 
 <svelte:window onkeydown={keyboard} />
@@ -1954,7 +2063,7 @@
       <button class:active={screen === 'library'} aria-current={screen === 'library' ? 'page' : undefined} onclick={() => navigate('library')} title="Library" aria-label="Library"><BookOpen size={20}/></button>
     </div>
     <div class="rail-bottom">
-      <button onclick={() => (dialog = 'commands')} title="Command palette" aria-label="Open command palette"><Command size={19}/></button>
+      <button onclick={() => (dialog = 'commands')} title="Search workspace (Ctrl+K)" aria-label="Search workspace (Ctrl+K)"><Command size={19}/></button>
       <button class:active={screen === 'settings'} aria-current={screen === 'settings' ? 'page' : undefined} onclick={() => navigate('settings')} title="Settings" aria-label="Settings"><Settings2 size={20}/></button>
       <div class="profile" title="Local workspace" aria-label="Local workspace">Y</div>
     </div>
@@ -1964,11 +2073,14 @@
     <div class="workspace-heading"><div class="workspace-icon">✧</div><div><strong>My workspace</strong><span>Personal space</span></div><ChevronDown size={15}/></div>
     {#if screen === 'rooms'}
       <div class="sidebar-section-title"><span>CONVERSATIONS</span><button aria-label="Create room" title="Create room" onclick={() => (dialog = 'new-room')}><Plus size={17}/></button></div>
+      {#if snapshot.rooms.length > 0}
+        <label class="room-search"><Search size={15} aria-hidden="true"/><input type="search" aria-label="Filter rooms" placeholder="Find a conversation…" autocomplete="off" bind:value={roomSearch}/><kbd>Ctrl K</kbd></label>
+      {/if}
       <div class="room-list">
-        {#each snapshot.rooms as r (r.id)}
+        {#each filteredRooms as r (r.id)}
           <button class:selected={roomId === r.id} aria-current={roomId === r.id ? 'true' : undefined} class="room-link" onclick={() => selectRoom(r.id)}><span class="room-symbol">#</span><span>{r.name}</span></button>
         {:else}
-          <div class="sidebar-empty">Rooms you create appear here.</div>
+          <div class="sidebar-empty">{snapshot.rooms.length ? 'No rooms match. Clear the search to see all conversations.' : 'Rooms you create appear here.'}</div>
         {/each}
       </div>
       <div class="sidebar-section-title agent-title"><span>YOUR TEAM</span><button title="Add an agent" aria-label="Add agent" onclick={() => (dialog = 'new-agent')}><Plus size={17}/></button></div>
@@ -2009,18 +2121,37 @@
             <div class="hero-footnote"><ShieldCheck size={15}/> Your files and tasks stay on your device unless you approve otherwise.</div>
           </div>
         {:else}
-          <div class="chat-scroll" role="log" aria-label="Conversation history" aria-live="off">
+          <div class="chat-scroll" role="region" aria-label="Conversation history and search">
             <div class="room-intro"><div class="room-intro-icon">#</div><h1>{room.name}</h1><p>{room.description || 'A space for you and your AI teammates to collaborate.'}</p><button class="soft-button small" onclick={() => (dialog = 'new-agent')}><Plus size={15}/> Add a teammate</button></div>
-            {#if messages.length > messagePageSize}
+            <div class="message-search-bar">
+              <label for="conversation-message-search">Search this conversation</label>
+              <input id="conversation-message-search" type="search" bind:value={messageQuery} oninput={() => (messagePage = 0)} placeholder="Find messages by text or sender…" autocomplete="off" />
+              {#if messageQuery}<button type="button" class="soft-button small" onclick={() => { messageQuery = ''; messagePage = 0; }}>Clear search</button>{/if}
+              <span role="status">{messageQuery.trim() ? `${matchingMessages.length} of ${messages.length} matching messages` : `${messages.length} messages`}</span>
+            </div>
+            {#if matchingMessages.length > messagePageSize}
               <div class="message-pagination" role="group" aria-label="Conversation message pages">
                 <button type="button" class="soft-button small" disabled={messagePage >= maxMessagePage} onclick={() => (messagePage = Math.min(maxMessagePage, messagePage + 1))}>Older messages</button>
-                <span>Showing {Math.max(1, visibleMessageEnd - visibleMessages.length + 1)}–{visibleMessageEnd} of {messages.length}</span>
+                <span>Showing {Math.max(1, visibleMessageEnd - visibleMessages.length + 1)}–{visibleMessageEnd} of {matchingMessages.length}</span>
                 <button type="button" class="soft-button small" disabled={messagePage === 0} onclick={() => (messagePage = Math.max(0, messagePage - 1))}>Newer messages</button>
               </div>
             {/if}
+            <div role="log" aria-label="Conversation messages" aria-live="off">
             {#each visibleMessages as message (message.id)}
-              <article class="message"><div class:user-avatar={message.sender_kind === 'user'} class="message-avatar">{message.sender_kind === 'user' ? 'Y' : '✳'}</div><div class="message-body"><div class="message-byline"><strong>{message.sender_name}</strong><span>{timeDisplay(message.created_at)}</span>{#if message.simulated}<span class="simulated">Simulation</span>{/if}</div><div class="message-text">{message.body}</div></div></article>
+              <article class="message"><div class:user-avatar={message.sender_kind === 'user'} class="message-avatar">{message.sender_kind === 'user' ? 'Y' : '✳'}</div><div class="message-body"><div class="message-byline"><strong>{message.sender_name}</strong><span>{timeDisplay(message.created_at)}</span>{#if message.simulated}<span class="simulated">Simulation</span>{/if}<button type="button" class="message-copy" aria-label={'Copy message from ' + message.sender_name} onclick={() => void copyMessageText(message.body)}>Copy message</button></div>
+                <div class="message-content">
+                  {#each splitChatBlocks(message.body) as block, index (index)}
+                    {#if block.kind === 'code'}
+                      <div class="message-code-block"><div class="message-code-heading"><span>{block.language || 'Code'}</span><button type="button" aria-label={'Copy ' + (block.language || 'code') + ' block'} onclick={() => void copyMessageText(block.text)}>Copy code</button></div><pre><code>{block.text}</code></pre></div>
+                    {:else}<div class="message-text">{block.text}</div>{/if}
+                  {/each}
+                </div>
+                </div>
+              </article>
+            {:else}
+              {#if messageQuery.trim()}<p class="message-search-empty" role="status">No messages match this search. Clear the query to see your conversation.</p>{/if}
             {/each}
+            </div>
           </div>
           <div class="composer-container">
             <form class="composer" onsubmit={(event) => {event.preventDefault(); void sendMessage();}}>
@@ -2084,7 +2215,30 @@
       </div>
     {:else if screen === 'home'}
       <header class="topbar"><div class="crumb"><strong>Home</strong></div><span class="privacy-note"><ShieldCheck size={14}/> Your own space</span></header>
-      <div class="content-page"><div class="eyebrow">WELCOME TO CONSTELLATION</div><h1>What will we<br /><em>work on today?</em></h1><p class="page-lede">Start a focused conversation, assemble a small team, and stay in control of every action.</p><div class="action-grid"><button onclick={() => (dialog = 'new-room')}><MessageCircle size={22}/><strong>Start a conversation</strong><span>Make room for a new idea</span><ArrowRight size={18}/></button><button onclick={() => navigate('library')}><UsersRound size={22}/><strong>Find a specialist</strong><span>Choose a helpful AI role</span><ArrowRight size={18}/></button><button onclick={openProviderDialog}><Cpu size={22}/><strong>Connect a model</strong><span>Use a remote API or local server</span><ArrowRight size={18}/></button></div><div class="home-status"><div><div class="local-dot"></div> Your workspace stays on this computer by default</div><span>{snapshot.rooms.length} rooms · {snapshot.agents.length} agents · {snapshot.providers.length} providers</span></div></div>
+      <div class="content-page home-page">
+        <div class="eyebrow">WELCOME TO CONSTELLATION</div><h1>What will we<br /><em>work on today?</em></h1>
+        <p class="page-lede">Start a focused conversation, assemble a small team, and stay in control of every action.</p>
+        <div class="action-grid"><button onclick={() => (dialog = 'new-room')}><MessageCircle size={22}/><strong>Start a conversation</strong><span>Make room for a new idea</span><ArrowRight size={18}/></button><button onclick={() => navigate('library')}><UsersRound size={22}/><strong>Find a specialist</strong><span>Choose a helpful AI role</span><ArrowRight size={18}/></button><button onclick={openProviderDialog}><Cpu size={22}/><strong>Connect a model</strong><span>Use a remote API or local server</span><ArrowRight size={18}/></button></div>
+        {#if homeRooms.length || homeOpenTasks.length}
+          <div class="home-work-grid">
+            <section aria-labelledby="home-rooms-title" class="home-work-panel">
+              <div class="home-work-heading"><h2 id="home-rooms-title">Your rooms</h2><button type="button" class="text-button" onclick={() => navigate('rooms')}>All rooms <ArrowRight size={14}/></button></div>
+              {#each homeRooms as recentRoom (recentRoom.id)}
+                <button type="button" class="home-work-link" onclick={() => openCommandRoom(recentRoom.id)}><span class="room-symbol">#</span><strong>{recentRoom.name}</strong><ChevronRight size={15}/></button>
+              {:else}<p>No rooms created yet.</p>{/each}
+            </section>
+            <section aria-labelledby="home-tasks-title" class="home-work-panel">
+              <div class="home-work-heading"><h2 id="home-tasks-title">Open tasks</h2><button type="button" class="text-button" onclick={() => navigate('tasks')}>All tasks <ArrowRight size={14}/></button></div>
+              {#each homeOpenTasks as activeTask (activeTask.id)}
+                <button type="button" class="home-work-link" onclick={() => { taskFilterRoomId = activeTask.room_id; taskSearch = activeTask.instructions.slice(0, 40); taskStatusFilter = 'all'; navigate('tasks'); }}>
+                  <span class="home-task-state" data-state={activeTask.state}>{activeTask.state}</span><strong>{activeTask.instructions}</strong><ChevronRight size={15}/>
+                </button>
+              {:else}<p>No tasks currently awaiting action. Create a task from any room.</p>{/each}
+            </section>
+          </div>
+        {/if}
+        <div class="home-status"><div><div class="local-dot"></div> Your workspace stays on this computer by default</div><span>{snapshot.rooms.length} rooms · {snapshot.agents.length} agents · {snapshot.providers.length} providers</span></div>
+      </div>
     {:else if screen === 'tasks'}
       <header class="topbar"><div class="crumb"><strong>Tasks</strong></div><button class="subtle-cta" onclick={() => openTaskDialog()}><Plus size={16}/> Plan task</button></header>
       <div class="content-page"><div class="eyebrow">WORK, WITHOUT THE GUESSWORK</div><h1>Every step,<br /><em>in the open.</em></h1><p class="page-lede">Plan work for your agents, then explicitly run a text-only task through a model you choose. Results are recorded in the room. The file tool accepts manual actions or bounded model proposals inside the app's private artifacts folder; both require independent native approval.</p>
@@ -2093,26 +2247,13 @@
           <button type="button" class:chosen={tasksView === 'workflows'} aria-pressed={tasksView === 'workflows'} onclick={showWorkflows}>Workflows</button>
         </div>
         {#if tasksView === 'tasks'}
-        <label class="task-provider-selector">Model for task execution
-          <select bind:value={selectedProviderId} disabled={!isNative || !!runningTaskId}>
-            <option value="">Choose a provider (required)…</option>
-            <option value="each-agent">Use the task agent’s saved model</option>
-            {#each snapshot.providers as provider (provider.id)}<option value={provider.id}>{provider.name} · {provider.model} ({providerKindLabel(provider.kind)})</option>{/each}
-          </select>
-        </label>
-        {#if snapshot.providers.length > 0}
-          <div class="task-provider-quick-choices" role="group" aria-label="Choose a model for a task">
-            {#each snapshot.providers as provider (provider.id)}
-              <button type="button" class:chosen={selectedProviderId === provider.id}
-                aria-label={'Use ' + provider.name + ' for task execution'}
-                aria-pressed={selectedProviderId === provider.id}
-                disabled={!isNative || !!runningTaskId}
-                onclick={() => (selectedProviderId = provider.id)}>{provider.name} · {provider.model}</button>
-            {/each}
-          </div>
-        {/if}
-        <p class="task-provider-notice" id="task-run-effects">Choose a model, review the instructions, then press Run. This sends the task text to the provider and may use paid credits. Models cannot execute device tools. Cancelling later cannot recall an already-sent request.</p>
-        <div class="tasks-filter"><label for="tasks-room-filter">Show tasks for</label><select id="tasks-room-filter" bind:value={taskFilterRoomId}><option value="">All rooms</option>{#each snapshot.rooms as taskRoom (taskRoom.id)}<option value={taskRoom.id}>{taskRoom.name}</option>{/each}</select></div>
+        <p class="task-provider-notice" id="task-run-effects">Each task has its own model selection. Review its instructions and provider before Run; the model request may use paid credits. Models cannot execute device tools. Cancelling later cannot recall an already-sent request.</p>
+        <div class="tasks-filter"><label for="tasks-room-filter">Show tasks for</label><select id="tasks-room-filter" bind:value={taskFilterRoomId}><option value="">All rooms</option>{#each snapshot.rooms as taskRoom (taskRoom.id)}<option value={taskRoom.id}>{taskRoom.name}</option>{/each}</select><label for="tasks-search">Find a task</label><input id="tasks-search" type="search" bind:value={taskSearch} placeholder="Instructions or agent…" autocomplete="off" /></div>
+        <div class="task-status-filter" role="group" aria-label="Filter tasks by status">
+          {#each [{id:'all',label:'All'},{id:'open',label:'In progress'},{id:'done',label:'Completed'},{id:'attention',label:'Needs attention'}] as filter}
+            <button type="button" class:chosen={taskStatusFilter === filter.id} aria-pressed={taskStatusFilter === filter.id} onclick={() => (taskStatusFilter = filter.id as typeof taskStatusFilter)}>{filter.label}</button>
+          {/each}
+        </div>
         <div class="task-overview" aria-label="Task plan progress">
           <div><strong>{taskCounts.total}</strong><span>All tasks</span></div>
           <div><strong>{taskCounts.awaiting}</strong><span>Awaiting action</span></div>
@@ -2122,9 +2263,12 @@
         </div>
         {#if roomTasks.length === 0}
           <div class="blank-panel"><div class="blank-icon"><Layers3 size={26}/></div><h2>{taskFilterRoomId ? 'No tasks in this room' : 'No tasks planned yet'}</h2><p>Create a room and a teammate, then save a task. Run text-only work manually through your chosen model; device tools are not enabled.</p><button class="soft-button" onclick={() => openTaskDialog()}>Plan your first task <ArrowRight size={15}/></button></div>
+        {:else if visibleRoomTasks.length === 0}
+          <div class="blank-panel"><div class="blank-icon"><Search size={26}/></div><h2>No matching tasks</h2><p>Try another status, room, or search term. Your tasks have not been changed.</p><button class="soft-button" onclick={() => { taskSearch = ''; taskStatusFilter = 'all'; taskFilterRoomId = ''; }}>Clear task filters</button></div>
         {:else}
+          <p class="task-filter-count" role="status">Showing {visibleRoomTasks.length} of {roomTasks.length} tasks</p>
           <div class="task-list" aria-label="Saved tasks">
-            {#each roomTasks as task (task.id)}
+            {#each visibleRoomTasks as task (task.id)}
               <article class="task-card">
                 <div class="task-card-top"><span class="task-state" data-state={task.state}>{task.state === 'pending' ? 'Pending · Not executed' : task.state === 'cancelled' ? 'Cancelled' : task.state === 'running' ? 'Running · Text request' : task.state}</span><span class="task-date">{timeDisplay(task.created_at)}</span></div>
                 <p class="task-instructions">{task.instructions}</p>
@@ -2133,6 +2277,16 @@
                     <button class="soft-button small" onclick={() => { selectRoom(task.room_id); navigate('rooms'); }}>View room result <ArrowRight size={14}/></button>
                   {/if}
                   {#if task.state === 'pending'}
+                    <label class="task-card-model">Model for task execution
+                      <select aria-label={'Model for task execution: ' + task.instructions.slice(0, 50)} value={taskProviders[task.id] ?? ''} disabled={!isNative || !!runningTaskId} onchange={(event) => { taskProviders = { ...taskProviders, [task.id]: event.currentTarget.value }; }}>
+                        <option value="">Choose a provider for this task…</option>
+                        <option value="each-agent">Use this agent’s saved model</option>
+                        {#each snapshot.providers as provider (provider.id)}<option value={provider.id}>{provider.name} · {provider.model} ({providerKindLabel(provider.kind)})</option>{/each}
+                      </select>
+                    </label>
+                    {#if taskProviderId(task)}
+                      <span class="task-provider-confirmation">Ready to contact {snapshot.providers.find((provider) => provider.id === taskProviderId(task))?.name} · {snapshot.providers.find((provider) => provider.id === taskProviderId(task))?.model}. Only this task’s instructions will be sent.</span>
+                    {:else}<span class="task-provider-confirmation">Choose a configured provider to enable Run. No request has been made.</span>{/if}
                     <button class="primary-button small" aria-describedby="task-run-effects" title={!taskProviderId(task) ? 'Choose a configured model above before running' : 'May send a billable model request'} disabled={!isNative || working || !!runningTaskId || !taskProviderId(task) || (!!multiStepStates[task.id] && multiStepStates[task.id].status !== 'not_started')} onclick={() => void runTask(task.id)}>{runningTaskId === task.id ? 'Running…' : 'Run text task'}</button>
                     <details class="task-extra">
                       <summary>Optional file actions · approval required</summary>
@@ -2415,9 +2569,9 @@
                       </li>{/each}</ol>
                       </details>
                       {#if !item.cancelled}
-                        <button type="button" class="soft-button small" aria-expanded={workflowCancelConfirmation === item.definition.workflow_id} disabled={!isNative || workflowCancelBusy || workflowLoading} onclick={() => void cancelWorkflow(item)}>{workflowCancelConfirmation === item.definition.workflow_id ? 'Confirm cancel pending steps' : 'Cancel pending steps'}</button>
+                        <button type="button" class="soft-button small" aria-controls={'workflow-cancel-' + item.definition.workflow_id} disabled={!isNative || workflowCancelBusy || workflowLoading} onclick={() => void cancelWorkflow(item)}>{workflowCancelConfirmation === item.definition.workflow_id ? 'Confirm cancel pending steps' : 'Cancel pending steps'}</button>
                         {#if workflowCancelConfirmation === item.definition.workflow_id}
-                          <div class="inline-confirmation" role="group" aria-label="Confirm workflow cancellation">
+                          <div id={'workflow-cancel-' + item.definition.workflow_id} class="inline-confirmation" role="group" aria-label="Confirm workflow cancellation">
                             <span>Stop all pending steps? Already-sent provider requests cannot be recalled.</span>
                             <button type="button" class="soft-button small" onclick={() => workflowCancelConfirmation = ''}>Keep workflow</button>
                           </div>
@@ -2520,14 +2674,33 @@
           <section class="evidence-results" aria-label="Document evidence results"><h2 role="status">{evidenceHits.length ? `${evidenceHits.length} matching passages ${evidenceSavedResults ? 'from saved sources' : 'from current text'}` : 'No matching passages'}</h2>
             <p class="evidence-field-note">Matches are verbatim UTF-8 spans checked against {evidenceSavedResults ? 'the saved source text' : 'this exact current draft'}. A matching passage does not independently validate its claims. Confirm citations in the original document before relying on them.</p>
             {#each evidenceHits as hit (`${hit.source_sha256}-${hit.start_byte}-${hit.end_byte}`)}
-              <article class="evidence-hit"><div class="evidence-hit-meta"><span><FileSearch size={14}/> {hit.relative_path} · UTF-8 bytes [{hit.start_byte}, {hit.end_byte})</span><button type="button" class="soft-button small" onclick={() => void copyEvidence(hit)}>Copy quote and citation</button></div><blockquote>{hit.quote}</blockquote>{#if evidenceAnchorLabel(hit)}<p class="evidence-field-note">Extracted from {evidenceAnchorLabel(hit)}. Verify in the original file; page/paragraph mapping is not saved with extracted text.</p>{/if}<details class="evidence-provenance"><summary>Check exact source SHA-256</summary><div class="evidence-hash">Source SHA-256: {hit.source_sha256}</div></details></article>
+                  <article class="evidence-hit"><div class="evidence-hit-meta"><span><FileSearch size={14}/> {hit.relative_path} · UTF-8 bytes [{hit.start_byte}, {hit.end_byte})</span><button type="button" class="soft-button small" onclick={() => void copyEvidence(hit)}>Copy quote and citation</button></div><blockquote>{hit.quote}</blockquote>{#if evidenceAnchorLabel(hit)}<p class="evidence-field-note">Extracted from {evidenceAnchorLabel(hit)}. Verify in the original file; page/paragraph mapping is not saved with extracted text.</p>{/if}<details class="evidence-provenance"><summary>Check exact source SHA-256</summary><div class="evidence-hash" role="note" aria-label={'Source SHA-256: ' + hit.source_sha256}>Source SHA-256: {hit.source_sha256}</div></details></article>
             {:else}<p class="evidence-empty">Try different terms. No passage is shown without a source match.</p>{/each}
           </section>
         {/if}
       </div>
     {:else if screen === 'library'}
       <header class="topbar"><div class="crumb"><strong>Role library</strong></div><button class="subtle-cta" onclick={() => (dialog = 'new-agent')}><Plus size={16}/> Create agent</button></header>
-      <div class="content-page library-page"><div class="eyebrow">THE RIGHT TEAM FOR ANY IDEA</div><h1>Find your <em>people.</em></h1><p class="page-lede">Browse curated roles. Each role provides tailored guidance when chatting with a model, but no tools, filesystem access, or execution privileges are granted.</p><label class="searchbox"><Search size={18}/><input aria-label="Search agent roles" bind:value={search} placeholder="Search roles..."/></label><div class="roles-grid">{#each filteredRoles as role (role.name)}<div class="role-card"><div class="role-icon">{role.icon}</div><div class="role-group">{role.group}</div><h2>{role.name}</h2><p>{role.blurb}</p><button aria-label={`Create ${role.name} agent`} disabled={!isNative || working} title={!isNative ? 'Available in the installed desktop app' : 'Add to your team'} onclick={() => void createAgent(role.name, role.name)}>Add to team <Plus size={16}/></button></div>{:else}<p>No roles match your search.</p>{/each}</div><p class="library-disclaimer">{starterRoles.length} distinct prompt-only roles. Fully operational tool-enabled agents are still being developed and no tools are granted by selecting a role.</p></div>
+      <div class="content-page library-page">
+        <div class="eyebrow">THE RIGHT TEAM FOR ANY IDEA</div><h1>Find your <em>people.</em></h1>
+        <p class="page-lede">Browse curated roles. Each role provides tailored guidance when chatting with a model, but no tools, filesystem access, or execution privileges are granted.</p>
+        <label class="searchbox"><Search size={18}/><input aria-label="Search agent roles" bind:value={search} oninput={() => (rolePageSize = 24)} placeholder="Search roles..."/></label>
+        <div class="role-category-filters" role="group" aria-label="Filter agent roles by specialty">
+          {#each ['All', ...roleGroups] as group}
+            <button type="button" aria-pressed={roleCategory === group} class:chosen={roleCategory === group} onclick={() => { roleCategory = group; rolePageSize = 24; }}>{group}</button>
+          {/each}
+        </div>
+        <p class="role-result-count" role="status">Showing {Math.min(rolePageSize, filteredRoles.length)} of {filteredRoles.length} matching roles · {starterRoles.length} total</p>
+        <div class="roles-grid">
+          {#each visibleRoles as role (role.name)}
+            <div class="role-card"><div class="role-icon">{role.icon}</div><div class="role-group">{role.group}</div><h2>{role.name}</h2><p>{role.blurb}</p><button aria-label={`Create ${role.name} agent`} disabled={!isNative || working} title={!isNative ? 'Available in the installed desktop app' : 'Add to your team'} onclick={() => void createAgent(role.name, role.name)}>Add to team <Plus size={16}/></button></div>
+          {:else}<div class="role-empty-state"><h2>No matching roles</h2><p>Try another specialty or search term.</p><button type="button" class="soft-button small" onclick={() => { search = ''; roleCategory = 'All'; rolePageSize = 24; }}>Clear role filters</button></div>{/each}
+        </div>
+        {#if visibleRoles.length < filteredRoles.length}
+          <button type="button" class="soft-button role-show-more" onclick={() => (rolePageSize += 24)}>Show 24 more roles · {filteredRoles.length - visibleRoles.length} remaining</button>
+        {/if}
+        <p class="library-disclaimer">{starterRoles.length} distinct prompt-only roles. Fully operational tool-enabled agents are still being developed and no tools are granted by selecting a role.</p>
+      </div>
     {:else}
       <header class="topbar"><div class="crumb"><strong>Settings</strong></div></header>
       <div class="content-page settings-page"><div class="eyebrow">MAKE IT YOURS</div><h1>Your space.<br /><em>Your rules.</em></h1><p class="page-lede">Connect a supported API format or local server. Provider availability and model capabilities depend on your endpoint.</p><div class="settings-block"><div><Cpu size={23}/><div><h2>AI connections</h2><p>Save models and select them for explicit requests.</p></div></div><button class="primary-button" onclick={openProviderDialog}><Plus size={16}/> Add provider</button></div>
@@ -2625,11 +2798,20 @@
 
 {#if dialog}
   <div class="modal-backdrop">
-    <div class="modal" role="dialog" aria-modal="true" aria-label={dialog === 'new-room' ? 'Create room' : dialog === 'new-agent' ? 'Create agent' : dialog === 'new-task' ? 'Plan task' : dialog === 'provider' ? 'Connect AI provider' : 'Command palette'} use:focusDialog>
+    <div class="modal" class:command-dialog={dialog === 'commands'} role="dialog" aria-modal="true" aria-label={dialog === 'new-room' ? 'Create room' : dialog === 'new-agent' ? 'Create agent' : dialog === 'new-task' ? 'Plan task' : dialog === 'provider' ? 'Connect AI provider' : 'Search workspace'} use:focusDialog>
       <div class="modal-heading"><div class="modal-icon">{#if dialog === 'new-room'}<MessageCircle size={21}/>{:else if dialog === 'new-agent'}<Bot size={21}/>{:else if dialog === 'new-task'}<Layers3 size={21}/>{:else if dialog === 'provider'}<Cpu size={21}/>{:else}<Command size={21}/>{/if}</div><button class="icon-button" aria-label="Close dialog" onclick={closeDialog}><X size={20}/></button></div>
       {#if dialog === 'new-room'}<h2>A space for what’s next.</h2><p>Start with a room name. Invite agents when you're ready.</p><form onsubmit={(event) => {event.preventDefault();void createRoom();}}><label>ROOM NAME<input bind:value={newRoom} placeholder="e.g. Research lab, My next product" maxlength="80" required/></label><button class="primary-button full" disabled={working || !newRoom.trim() || !isNative} type="submit">Create room <ArrowRight size={17}/></button></form>
       {:else if dialog === 'new-agent'}<h2>Meet your next teammate.</h2><p>Choose a role and a name. Permissions and model capabilities still determine what an agent can actually do.</p><form onsubmit={(event) => {event.preventDefault();void createAgent(selectedRole,newAgent);}}><label>ROLE<select bind:value={selectedRole}>{#each starterRoles as role}<option value={role.name}>{role.name}</option>{/each}</select></label><label>DISPLAY NAME<input bind:value={newAgent} placeholder="e.g. Avery" maxlength="80"/></label><button class="primary-button full" disabled={working || !isNative} type="submit">Add teammate <ArrowRight size={17}/></button></form>
-      {:else if dialog === 'new-task'}<h2>Plan your next task.</h2><p>Save instructions for a teammate. Text-only model execution is available with an explicitly selected provider; local file actions still require separate native approval.</p><form onsubmit={(event) => {event.preventDefault();void createTask();}}><label>ROOM<select bind:value={taskRoomId} required>{#each snapshot.rooms as r (r.id)}<option value={r.id}>{r.name}</option>{/each}</select></label><label>TEAMMATE<select bind:value={taskAgentId} required>{#each snapshot.agents as agent (agent.id)}<option value={agent.id}>{agent.name} — {agent.role}</option>{/each}</select></label><label>INSTRUCTIONS<textarea bind:value={taskInstructions} rows="4" maxlength="10000" required placeholder="Describe the outcome you want..."></textarea></label><button class="primary-button full" type="submit" disabled={!isNative || working || !taskRoomId || !taskAgentId || !taskInstructions.trim()}>Save pending task <ArrowRight size={17}/></button></form>{#if !snapshot.rooms.length || !snapshot.agents.length}<p class="dialog-footnote">Create a room and add a teammate before saving a task.</p>{/if}
+      {:else if dialog === 'new-task'}<h2>Plan your next task.</h2><p>Save instructions for a teammate. Text-only model execution is available with an explicitly selected provider; local file actions still require separate native approval.</p>
+        {#if !snapshot.rooms.length || !snapshot.agents.length}
+          <div class="task-setup-guide" role="group" aria-label="Complete task prerequisites">
+            <strong>Complete your setup to save this plan</strong>
+            {#if !snapshot.rooms.length}<button type="button" class="soft-button small" onclick={() => continueTaskSetup('new-room')}><Plus size={14}/> Create a room first</button>{/if}
+            {#if !snapshot.agents.length}<button type="button" class="soft-button small" onclick={() => continueTaskSetup('new-agent')}><Plus size={14}/> Add a teammate</button>{/if}
+            <span>Your instructions stay in the form while you complete setup.</span>
+          </div>
+        {/if}
+        <form onsubmit={(event) => {event.preventDefault();void createTask();}}><label>ROOM<select bind:value={taskRoomId} required>{#each snapshot.rooms as r (r.id)}<option value={r.id}>{r.name}</option>{/each}</select></label><label>TEAMMATE<select bind:value={taskAgentId} required>{#each snapshot.agents as agent (agent.id)}<option value={agent.id}>{agent.name} — {agent.role}</option>{/each}</select></label><label>INSTRUCTIONS<textarea bind:value={taskInstructions} rows="4" maxlength="10000" required placeholder="Describe the outcome you want..."></textarea></label><button class="primary-button full" type="submit" disabled={!isNative || working || !taskRoomId || !taskAgentId || !taskInstructions.trim()}>Save pending task <ArrowRight size={17}/></button></form>
       {:else if dialog === 'provider'}
         <h2>Bring your own model.</h2>
         <p>Choose the API format this provider actually supports. Saving a connection does not contact the provider or send messages.</p>
@@ -2652,7 +2834,9 @@
           <button class="primary-button full" disabled={working || !providerName.trim() || !providerEndpoint.trim() || !providerModel.trim() || !isNative} type="submit">Save connection locally <ArrowRight size={17}/></button>
         </form>
         <p class="dialog-footnote"><ShieldCheck size={14}/> Provider compatibility is not guaranteed. Only explicit Ask, Run, or Test actions can send model requests; remote services may charge.</p>
-      {:else}<h2>Where would you like to go?</h2><p>Quickly navigate your workspace. <kbd>Esc</kbd> closes this menu.</p><div class="command-list">{#each [{label:'Home',target:'home'},{label:'Rooms',target:'rooms'},{label:'Tasks',target:'tasks'},{label:'Evidence',target:'evidence'},{label:'Role library',target:'library'},{label:'Settings',target:'settings'}] as command}<button onclick={() => navigate(command.target as Screen)}>{command.label}<ArrowRight size={16}/></button>{/each}</div>{/if}
+      {:else}
+        <WorkspaceCommandPalette rooms={snapshot.rooms} onNavigate={navigate} onSelectRoom={openCommandRoom} onAction={openCommandAction}/>
+      {/if}
       {#if !isNative}<p class="dialog-footnote" role="status">This is a browser preview. Changes require the installed desktop app.</p>{/if}
     </div>
   </div>

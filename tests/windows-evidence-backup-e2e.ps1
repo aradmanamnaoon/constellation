@@ -771,9 +771,20 @@ try {
         throw "Expected one source-hash disclosure; found $($shaDisclosures.Count)."
       }
       Ui-Invoke $shaDisclosures[0]
-      $names = @((Ui-Records $root) | ForEach-Object { $_.Name } | Where-Object { $_ })
-      $shaLabel = @($names | Where-Object { $_ -match '^Source SHA-256:\s*[0-9a-fA-F]{64}$' } | Select-Object -First 1)
-      if (-not $shaLabel.Count) { throw 'Evidence SHA-256 label missing from UIA tree.' }
+      $shaLabel = @()
+      $shaUntil = [DateTime]::UtcNow.AddSeconds(6)
+      do {
+        $shaRecords = @(Ui-Records $root)
+        $names = @($shaRecords | ForEach-Object { $_.Name } | Where-Object { $_ })
+        $shaLabel = @($names | Where-Object { $_ -match '^Source SHA-256:\s*[0-9a-fA-F]{64}$' } | Select-Object -First 1)
+        if ($shaLabel.Count) { break }
+        Start-Sleep -Milliseconds 180
+      } while ([DateTime]::UtcNow -lt $shaUntil)
+      if (-not $shaLabel.Count) {
+        $result.evidence_hash_uia_samples = @($shaRecords | Where-Object { $_.Name -match '(?i)source|sha-256|verification' } |
+          Select-Object -First 16 | ForEach-Object { $_.Type + ': ' + $_.Name })
+        throw 'Evidence SHA-256 label missing from UIA tree after expanding its real disclosure.'
+      }
       $seenSha = ($shaLabel[0] -replace '^Source SHA-256:\s*', '').ToLowerInvariant()
       $result.observed_source_sha256 = $seenSha
       if ($seenSha -cne $sourceSha) { throw 'Displayed SHA256 does not equal fixture SHA256.' }

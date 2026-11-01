@@ -12,12 +12,17 @@ param(
   [Parameter(Mandatory = $true)][ValidateNotNullOrEmpty()][string]$ExePath,
   [ValidateRange(5, 90)][int]$TimeoutSeconds = 35,
   [string]$OutputDirectory,
+  [switch]$TestCommandPalette,
+  [switch]$TestTaskJourney,
+  [ValidateRange(800, 4096)][int]$ViewportWidth = 0,
+  [ValidateRange(560, 2160)][int]$ViewportHeight = 0,
   [Parameter(Mandatory = $true)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedExeSha256,
   [string]$HiddenDesktopWorkerName
 )
 
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Windows is required.' }
+if (($ViewportWidth -gt 0) -ne ($ViewportHeight -gt 0)) { throw 'ViewportWidth and ViewportHeight must be provided together.' }
 
 $resolvedExe = (Resolve-Path -LiteralPath $ExePath -ErrorAction Stop).ProviderPath
 $exeFile = Get-Item -LiteralPath $resolvedExe
@@ -32,7 +37,8 @@ if ((Get-FileHash -LiteralPath $resolvedExe -Algorithm SHA256).Hash -ine $Expect
 if (-not $HiddenDesktopWorkerName) {
   $workerParams = @{
     ScriptPath = $PSCommandPath; ExePath = $resolvedExe; TimeoutSeconds = $TimeoutSeconds
-    ExpectedExeSha256 = $ExpectedExeSha256
+    ExpectedExeSha256 = $ExpectedExeSha256; TestCommandPalette = [bool]$TestCommandPalette
+    TestTaskJourney = [bool]$TestTaskJourney; ViewportWidth = $ViewportWidth; ViewportHeight = $ViewportHeight
   }
   if ($OutputDirectory) {
     $workerParams.OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
@@ -89,6 +95,8 @@ public static class ConstellationInstalledWin32 {
   private static extern bool IsWindowVisible(IntPtr hwnd);
   [DllImport("user32.dll", SetLastError = true)]
   public static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
+  [DllImport("user32.dll", SetLastError = true)]
+  public static extern bool MoveWindow(IntPtr hwnd, int x, int y, int width, int height, bool repaint);
   [DllImport("user32.dll", SetLastError = true)]
   public static extern bool PrintWindow(IntPtr hwnd, IntPtr targetDc, uint flags);
 
@@ -154,10 +162,13 @@ $result = [ordered]@{
   window_title = $null
   native_owner_predicates = $null
   window_bounds_px = $null
+  viewport_resize_status = if ($ViewportWidth -gt 0) { 'pending' } else { 'not_requested' }
   webview_ready = $false
   uia_status = if ($uiaAvailable) { 'not_checked' } else { 'unavailable' }
   uia_descendants = 0
   observed_controls = @()
+  palette_result = if ($TestCommandPalette) { 'pending' } else { 'not_requested' }
+  task_journey_result = if ($TestTaskJourney) { 'pending' } else { 'not_requested' }
   screenshot_path = $null
   screenshot_method = $null
   screenshot_distinct_sample_colors = $null
@@ -262,6 +273,195 @@ try {
   if ($uiaAvailable -and -not $result.webview_ready) {
     $result.errors += 'WebView2 UI Automation did not expose three expected navigation controls before timeout.'
   }
+  if ($ViewportWidth -gt 0) {
+    Assert-ConstellationHiddenWindow $hwnd $HiddenDesktopWorkerName
+    $before = New-Object ConstellationInstalledWin32+Rect
+    if (-not [ConstellationInstalledWin32]::GetWindowRect($hwnd, [ref]$before)) { throw 'Cannot read owned HWND bounds before resize.' }
+    if (-not [ConstellationInstalledWin32]::MoveWindow($hwnd, $before.Left, $before.Top, $ViewportWidth, $ViewportHeight, $true)) {
+      throw 'Cannot resize the private test HWND.'
+    }
+    Start-Sleep -Milliseconds 450
+    $after = New-Object ConstellationInstalledWin32+Rect
+    if (-not [ConstellationInstalledWin32]::GetWindowRect($hwnd, [ref]$after)) { throw 'Cannot read owned HWND bounds after resize.' }
+    $actualWidth = $after.Right - $after.Left
+    $actualHeight = $after.Bottom - $after.Top
+    $result.viewport_requested_px = @{ width = $ViewportWidth; height = $ViewportHeight }
+    $result.viewport_actual_px = @{ width = $actualWidth; height = $actualHeight }
+    if ([Math]::Abs($actualWidth - $ViewportWidth) -gt 8 -or [Math]::Abs($actualHeight - $ViewportHeight) -gt 8) {
+      throw "Private HWND refused requested resize: requested $ViewportWidth x $ViewportHeight, observed $actualWidth x $actualHeight."
+    }
+    $result.viewport_resize_status = 'passed: owned application HWND resized, not a 200% browser zoom proof'
+  }
+  if ($TestCommandPalette) {
+    if (-not $uiaAvailable -or -not $result.webview_ready) {
+      throw 'Cannot test palette without a ready native WebView2 accessibility tree.'
+    }
+    Assert-ConstellationHiddenDesktop $HiddenDesktopWorkerName
+    Assert-ConstellationHiddenWindow $hwnd $HiddenDesktopWorkerName
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    $nameProperty = [System.Windows.Automation.AutomationElement]::NameProperty
+    $scope = [System.Windows.Automation.TreeScope]::Descendants
+    $commandButton = $root.FindFirst($scope, (New-Object System.Windows.Automation.PropertyCondition($nameProperty, 'Search workspace (Ctrl+K)')))
+    if ($null -eq $commandButton) { throw 'The real UIA tree does not expose the workspace search button.' }
+    $invoke = $commandButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
+    if ($null -eq $invoke) { throw 'The workspace search button lacks a real invoke pattern.' }
+    $invoke.Invoke()
+    $foundSearch = $false
+    $foundEvidence = $false
+    $deadline = [DateTime]::UtcNow.AddSeconds(6)
+    do {
+      $controls = $root.FindAll($scope, [System.Windows.Automation.Condition]::TrueCondition)
+      foreach ($control in $controls) {
+        try {
+          if ($control.Current.Name -eq 'Search workspace commands and rooms') { $foundSearch = $true }
+          if ($control.Current.Name -eq 'Evidence') { $foundEvidence = $true }
+        } catch {}
+      }
+      if ($foundSearch -and $foundEvidence) { break }
+      Start-Sleep -Milliseconds 150
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if (-not $foundSearch -or -not $foundEvidence) {
+      throw "The invoked native palette is incomplete: search=$foundSearch; evidence=$foundEvidence."
+    }
+    $modal = $root.FindFirst($scope, (New-Object System.Windows.Automation.PropertyCondition($nameProperty, 'Search workspace')))
+    if ($null -eq $modal) { throw 'Palette search modal is missing from the current UIA tree.' }
+    $searchControl = $modal.FindFirst($scope, (New-Object System.Windows.Automation.PropertyCondition($nameProperty, 'Search workspace commands and rooms')))
+    if ($null -eq $searchControl) { throw 'Palette input is missing inside the search dialog.' }
+    $result.palette_input_type = $searchControl.Current.ControlType.ProgrammaticName
+    $supportedValue = $null
+    if (-not $searchControl.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$supportedValue)) {
+      throw 'Palette input has no writable UI Automation ValuePattern.'
+    }
+    $value = [System.Windows.Automation.ValuePattern]$supportedValue
+    if ($value.Current.IsReadOnly) { throw 'Palette search input is read-only.' }
+    $value.SetValue('zz-a-purposefully-unmatched-destination')
+    $noMatches = $false
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+      $message = $modal.FindFirst($scope, (New-Object System.Windows.Automation.PropertyCondition($nameProperty, 'No matching destinations. Try the room name or a section such as Evidence.')))
+      if ($null -ne $message) { $noMatches = $true; break }
+      Start-Sleep -Milliseconds 150
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if (-not $noMatches) { throw 'Palette did not show its real no-results message after UIA typed an unmatched search.' }
+    $value.SetValue('Evidence')
+    $foundOption = $false
+    $result.palette_sample_results = @()
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+      $listbox = $modal.FindFirst($scope, (New-Object System.Windows.Automation.PropertyCondition($nameProperty, 'Workspace destinations')))
+      $resultItem = $null
+      if ($null -ne $listbox) {
+        $resultControls = $listbox.FindAll($scope, [System.Windows.Automation.Condition]::TrueCondition)
+        $labels = @()
+        foreach ($child in $resultControls) {
+          try {
+            $name = [string]$child.Current.Name
+            if ($name -and $labels.Count -lt 14) { $labels += ($child.Current.ControlType.ProgrammaticName + ': ' + $name) }
+            if ($name -match '^Evidence(?:\s|$)' -and $name -match 'Saved documents') { $resultItem = $child }
+          } catch {}
+        }
+        $result.palette_sample_results = $labels
+      }
+      if ($null -ne $resultItem) { $foundOption = $true; break }
+      Start-Sleep -Milliseconds 150
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if (-not $foundOption) { throw 'Palette search did not expose the Evidence result in its scoped listbox.' }
+    $result.palette_result = 'passed: native UIA invoke + ValuePattern unmatched/positive search and real listbox result'
+  }
+  if ($TestTaskJourney) {
+    if (-not $uiaAvailable -or -not $result.webview_ready) {
+      throw 'Cannot exercise task creation without a ready native WebView2 accessibility tree.'
+    }
+    Assert-ConstellationHiddenDesktop $HiddenDesktopWorkerName
+    Assert-ConstellationHiddenWindow $hwnd $HiddenDesktopWorkerName
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    $scope = [System.Windows.Automation.TreeScope]::Descendants
+    function Find-ExactUxControl([string]$name, [string]$type = '', [int]$seconds = 7) {
+      $deadline = [DateTime]::UtcNow.AddSeconds($seconds)
+      do {
+        $matches = @()
+        foreach ($child in $root.FindAll($scope, [System.Windows.Automation.Condition]::TrueCondition)) {
+          try {
+            if ($child.Current.Name -ceq $name -and (!$type -or $child.Current.ControlType.ProgrammaticName -ceq $type)) {
+              $matches += $child
+            }
+          } catch {}
+        }
+        if ($matches.Count -eq 1) { return $matches[0] }
+        if ($matches.Count -gt 1) { throw "Ambiguous native UIA control '$name' ($($matches.Count))." }
+        Start-Sleep -Milliseconds 160
+      } while ([DateTime]::UtcNow -lt $deadline)
+      throw "Expected native UIA control was not exposed: '$name' [$type]."
+    }
+    function Invoke-UxControl([System.Windows.Automation.AutomationElement]$element) {
+      $patternObject = $null
+      if ($element.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$patternObject)) {
+        ([System.Windows.Automation.InvokePattern]$patternObject).Invoke()
+        return
+      }
+      # Chromium exposes aria-pressed filter buttons through UIA TogglePattern.
+      if ($element.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$patternObject)) {
+        ([System.Windows.Automation.TogglePattern]$patternObject).Toggle()
+        return
+      }
+      throw "Native button '$($element.Current.Name)' has neither InvokePattern nor TogglePattern."
+    }
+    function Set-UxInput([System.Windows.Automation.AutomationElement]$element, [string]$text) {
+      $patternObject = $null
+      if (-not $element.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$patternObject)) {
+        throw "Missing ValuePattern for native input '$($element.Current.Name)'."
+      }
+      $valuePattern = [System.Windows.Automation.ValuePattern]$patternObject
+      if ($valuePattern.Current.IsReadOnly) { throw "Native input '$($element.Current.Name)' is read-only." }
+      $valuePattern.SetValue($text)
+    }
+    if ($TestCommandPalette) {
+      Invoke-UxControl (Find-ExactUxControl 'Close dialog' 'ControlType.Button')
+    }
+    Invoke-UxControl (Find-ExactUxControl 'Tasks' 'ControlType.Button')
+    Invoke-UxControl (Find-ExactUxControl 'Plan your first task' 'ControlType.Button')
+    [void](Find-ExactUxControl 'Complete your setup to save this plan')
+    [void](Find-ExactUxControl 'Create a room first' 'ControlType.Button')
+    [void](Find-ExactUxControl 'Add a teammate' 'ControlType.Button')
+    $taskText = 'Private UX task journey, no model or file action'
+    Set-UxInput (Find-ExactUxControl 'INSTRUCTIONS' 'ControlType.Edit') $taskText
+    Invoke-UxControl (Find-ExactUxControl 'Create a room first' 'ControlType.Button')
+    Set-UxInput (Find-ExactUxControl 'ROOM NAME' 'ControlType.Edit') 'Private UX room'
+    Invoke-UxControl (Find-ExactUxControl 'Create room' 'ControlType.Button')
+    Invoke-UxControl (Find-ExactUxControl 'Add a teammate' 'ControlType.Button')
+    Set-UxInput (Find-ExactUxControl 'DISPLAY NAME' 'ControlType.Edit') 'Private UX analyst'
+    Invoke-UxControl (Find-ExactUxControl 'Add teammate' 'ControlType.Button')
+    $draft = Find-ExactUxControl 'INSTRUCTIONS' 'ControlType.Edit'
+    $valuePattern = $draft.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+    if ([string]$valuePattern.Current.Value -cne $taskText) {
+      throw 'Task draft was lost while completing room and agent setup.'
+    }
+    Invoke-UxControl (Find-ExactUxControl 'Save pending task' 'ControlType.Button')
+    [void](Find-ExactUxControl $taskText)
+    [void](Find-ExactUxControl ('Model for task execution: ' + $taskText) 'ControlType.ComboBox')
+    $run = Find-ExactUxControl 'Run text task' 'ControlType.Button'
+    if ($run.Current.IsEnabled) { throw 'Task Run is enabled without any configured provider.' }
+    Invoke-UxControl (Find-ExactUxControl 'Completed' 'ControlType.Button')
+    [void](Find-ExactUxControl 'No matching tasks')
+    Invoke-UxControl (Find-ExactUxControl 'All' 'ControlType.Button')
+    Set-UxInput (Find-ExactUxControl 'Find a task' 'ControlType.Edit') 'no-matching-synthetic-task'
+    [void](Find-ExactUxControl 'No matching tasks')
+    Invoke-UxControl (Find-ExactUxControl 'Clear task filters' 'ControlType.Button')
+    [void](Find-ExactUxControl $taskText)
+    $sqlitePath = Join-Path (Join-Path $scratchRoot 'Data') 'constellation.sqlite3'
+    $readTask = @'
+const { DatabaseSync } = require("node:sqlite");
+const db = new DatabaseSync(process.argv[2], { readOnly: true });
+const count = db.prepare("SELECT COUNT(*) AS n FROM tasks").get().n;
+console.log(count);
+db.close();
+'@
+    $count = $readTask | node - $sqlitePath
+    if ($LASTEXITCODE -ne 0 -or [string]$count -cne '1') {
+      throw 'Expected exactly one native persisted task in the disposable SQLite file.'
+    }
+    $result.task_journey_result = 'passed: native prerequisites, draft return, SQLite task, safe disabled Run, status and keyword filtering'
+  }
 
   $rect = New-Object ConstellationInstalledWin32+Rect
   if (-not [ConstellationInstalledWin32]::GetWindowRect($hwnd, [ref]$rect)) {
@@ -331,6 +531,6 @@ try {
 }
 
 $result | ConvertTo-Json -Depth 6
-if (-not $result.webview_ready -or $result.screenshot_status -ne 'captured_with_visual_detail' -or -not $result.process_closed) {
+if (-not $result.webview_ready -or $result.screenshot_status -ne 'captured_with_visual_detail' -or -not $result.process_closed -or ($ViewportWidth -gt 0 -and -not $result.viewport_resize_status.StartsWith('passed:')) -or ($TestCommandPalette -and -not $result.palette_result.StartsWith('passed:')) -or ($TestTaskJourney -and -not $result.task_journey_result.StartsWith('passed:'))) {
   exit 1
 }

@@ -8,3 +8,12 @@ docs/mission/COMPLETE_EXECUTION_PLAN.md text eol=lf
 skills-manifest/inventory.json text eol=lf
 # Bash runner is executed in WSL from this Windows-managed checkout.
 scripts/qa/run-ubuntu-wsl-ci.sh text eol=lf
+# Source contract tests inspect exact line boundaries, including on Windows.
+# Keep these files byte-stable across worktrees and hosted platforms.
+*.rs text eol=lf
+*.svelte text eol=lf
+tests/*.ps1 text eol=lf
+.github/workflows/*.yml text eol=lf
+tests/*.sh text eol=lf
+scripts/*.sh text eol=lf
+scripts/qa/*.sh text eol=lf
