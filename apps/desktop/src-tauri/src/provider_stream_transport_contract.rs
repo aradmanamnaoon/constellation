@@ -74,13 +74,46 @@ fn fixture(
             "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
         );
-        stream.write_all(header.as_bytes()).unwrap();
+        // The rejection test intentionally advertises an invalid MIME type.
+        // A correct client may close the socket as soon as the headers arrive
+        // without reading the response body. Windows reports that as
+        // ConnectionAborted (WSAECONNABORTED 10053), whereas Unix often
+        // reports BrokenPipe or ConnectionReset. Do not mistake the expected
+        // client-side refusal for a fixture/server failure in that one case.
+        let reject_mime = matches!(
+            content_type.as_str(),
+            "application/json" | "text/event-stream-malformed"
+        );
+        let expected_early_close = |error: &std::io::Error| {
+            reject_mime
+                && matches!(
+                    error.kind(),
+                    std::io::ErrorKind::ConnectionAborted
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::BrokenPipe
+                )
+        };
+        if let Err(error) = stream.write_all(header.as_bytes()) {
+            if expected_early_close(&error) {
+                return;
+            }
+            panic!("native model stream response header write failed: {error}");
+        }
         // Multiple network writes may coalesce; the decoder must still accept
         // both split and joined event boundaries.
         for portion in body.chunks(17) {
-            stream.write_all(portion).unwrap();
+            if let Err(error) = stream.write_all(portion) {
+                if expected_early_close(&error) {
+                    return;
+                }
+                panic!("native model stream response body write failed: {error}");
+            }
         }
-        stream.flush().unwrap();
+        if let Err(error) = stream.flush() {
+            if !expected_early_close(&error) {
+                panic!("native model stream response flush failed: {error}");
+            }
+        }
     });
     let base_url = match kind {
         ProviderKind::OllamaNative => format!("http://127.0.0.1:{port}"),
