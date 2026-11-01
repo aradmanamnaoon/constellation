@@ -11,6 +11,7 @@ import {
 
 const root = resolve(import.meta.dirname, '..');
 const workflow = readFileSync(resolve(root, '.github/workflows/acceptance.yml'), 'utf8');
+const validationWorkflow = readFileSync(resolve(root, '.github/workflows/validate.yml'), 'utf8');
 const standard = new Set(REQUIRED_FILES);
 const fixture = (overrides = {}) => inspectSourceManifest({
   tracked: standard, actual: standard, sources: new Set(['crates/constellation-core/src/lib.rs']),
@@ -141,6 +142,23 @@ test('only immutable action SHAs, no user-influenced command interpolation or pu
   assert.doesNotMatch(workflow, /\b(?:gh release create|softprops\/action-gh-release|actions\/create-release)\b/);
   assert.match(workflow, /contents: read/);
   assert.match(workflow, /persist-credentials: false/);
+});
+
+test('both hosted workflows pin every third-party GitHub Action to an immutable source commit', () => {
+  for (const [name, source] of [
+    ['acceptance', workflow],
+    ['validation', validationWorkflow],
+  ]) {
+    const calls = [...source.matchAll(/^\s*- uses:\s*([^\s#]+)/gm)];
+    assert(calls.length >= 5, `${name} must retain real hosted Action calls`);
+    for (const match of calls) {
+      assert.match(match[1], /^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+@[0-9a-f]{40}$/,
+        `${name}: unpinned or dynamic Action: ${match[1]}`);
+    }
+    const forged = source.replace(calls[0][1], 'actions/checkout@v4');
+    assert([...forged.matchAll(/^\s*- uses:\s*([^\s#]+)/gm)]
+      .some((match) => !/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+@[0-9a-f]{40}$/.test(match[1])));
+  }
 });
 
 test('release path is opt-in and fail closed if platform, evidence or signing unverified', () => {
