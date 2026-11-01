@@ -663,6 +663,21 @@ fn foreign_database_is_rejected_without_schema_repair() {
     )
     .unwrap();
     drop(conn);
+    // SQLite's default creation mode can be 0644 under the CI runner's
+    // umask. RunnerStore correctly rejects such a file at its Unix
+    // owner-only permissions gate before it can inspect schema identity.
+    // Make this foreign database private so the test reaches and verifies
+    // the intended independent application_id/schema rejection boundary.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(matches!(
+            RunnerStore::open(&path, KEY),
+            Err(ServiceError::Denied)
+        ));
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
     assert!(matches!(
         RunnerStore::open(&path, KEY),
         Err(ServiceError::Schema)

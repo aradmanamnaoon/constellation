@@ -47,6 +47,17 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      - name: Install Tauri 2 Linux native build requirements
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev pkg-config
+          pkg-config --exists glib-2.0 gtk+-3.0 webkit2gtk-4.1
       - name: Fixed Rust toolchain with formatting and lint components
         shell: bash
         run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
@@ -337,6 +348,16 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '24.17.0'
+      - name: Install Linux Tauri 2/WebKit and package build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev \
+            librsvg2-dev pkg-config patchelf
+          pkg-config --exists glib-2.0 gtk+-3.0 webkit2gtk-4.1
       - run: rustup toolchain install 1.99.1 --profile minimal
       - run: npm install --global pnpm@12.15.0
       - name: Verify required WebKit/GTK development libraries are provisioned
