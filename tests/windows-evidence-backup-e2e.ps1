@@ -719,7 +719,9 @@ try {
   Ui-Invoke $evidenceButton
   $document = Ui-Wait $root 'Document' 'evidence-document' 10
   $queryInput = Ui-Wait $root 'Search terms' 'evidence-query' 10
-  $searchButton = Ui-Wait $root 'Find passages' '' 10
+  # The current Evidence form labels the actionable submit button explicitly.
+  # Never accept the non-actionable workflow navigation text 'Find passages'.
+  $searchButton = Ui-Wait $root 'Find in current text' '' 10
   $result.evidence_discovery = @(Ui-Discovery $root)
   if ($null -eq $document -or $null -eq $queryInput -or $null -eq $searchButton) {
     $result.evidence_status = 'blocked_controls_missing'
@@ -759,6 +761,17 @@ try {
       if (-not @($names | Where-Object { $_ -ceq $expectedQuote }).Count) {
         throw 'Exact byte-sliced quote was not present as a UIA text element (could be a WebView2 accessibility blocker).'
       }
+      # The current Evidence UI hides full source identity inside a disclosure.
+      # Open the actual native accessibility toggle before checking the digest;
+      # absence of this independently visible control is a hard failure.
+      $shaDisclosures = @((Ui-Records $root) | Where-Object {
+        $_.Type -ceq 'ControlType.Button' -and $_.Name -ceq 'Check exact source SHA-256'
+      })
+      if ($shaDisclosures.Count -ne 1) {
+        throw "Expected one source-hash disclosure; found $($shaDisclosures.Count)."
+      }
+      Ui-Invoke $shaDisclosures[0]
+      $names = @((Ui-Records $root) | ForEach-Object { $_.Name } | Where-Object { $_ })
       $shaLabel = @($names | Where-Object { $_ -match '^Source SHA-256:\s*[0-9a-fA-F]{64}$' } | Select-Object -First 1)
       if (-not $shaLabel.Count) { throw 'Evidence SHA-256 label missing from UIA tree.' }
       $seenSha = ($shaLabel[0] -replace '^Source SHA-256:\s*', '').ToLowerInvariant()
@@ -1027,6 +1040,17 @@ try {
         # This UI action is explicitly authorized only after the provider is
         # proved to be our loopback TcpListener. It will send one synthetic
         # request, never a paid/external model or device tool invocation.
+        # Current native UI nests per-step actions in a closed <details>.
+        # Expand the unique actionable summary; never infer a hidden control
+        # from its source or manufacture a provider response.
+        $reviewSummaries = @((Ui-Records $root) | Where-Object {
+          $_.Type -ceq 'ControlType.Button' -and
+          $_.Name -cin @('Review steps, provider results and export', 'Review Steps, Provider Results And Export')
+        })
+        if ($reviewSummaries.Count -ne 1) {
+          throw "Expected one saved workflow review summary; found $($reviewSummaries.Count)."
+        }
+        Ui-Invoke $reviewSummaries[0]
         $runStepLabel = 'Run text step ' + [char]0xB7 + ' may use provider credits'
         Ui-Invoke (Ui-WaitEnabled $root $runStepLabel 8)
         $stepDeadline = [DateTime]::UtcNow.AddSeconds(15)
@@ -1065,6 +1089,16 @@ try {
         catch { $result.blockers += "Workflow local step screenshot: $($_.Exception.Message)" }
       }
       Ui-Invoke (Ui-WaitEnabled $root 'Cancel pending steps' 8)
+      # Cancellation is intentionally a separate, explicit confirmation.
+      # Merely opening the confirmation is not a terminal native decision.
+      $confirmCancel = Ui-WaitEnabled $root 'Confirm cancel pending steps' 8
+      if ($confirmCancel.Type -cne 'ControlType.Button') {
+        throw 'Workflow cancellation confirmation is not a native UIA button.'
+      }
+      # Do not claim cancellation from merely opening the confirmation. The
+      # UIA pattern must really activate the confirmation; unsupported
+      # Chromium ExpandCollapse action is a recorded release blocker.
+      Ui-Invoke $confirmCancel
       if ($null -eq (Ui-Wait $root 'Cancelled' '' 8)) {
         throw 'Native workflow cancellation did not appear as Cancelled in UIA list.'
       }
@@ -1161,6 +1195,16 @@ try {
       $instructions = Ui-RequireUniqueEdit $root 'INSTRUCTIONS'
       Ui-SetText $root $instructions 'Review one disposable local test file; do not invoke external providers.'
       Ui-Invoke (Ui-WaitEnabled $root 'Save pending task' 7)
+      # Manual file actions are inside a collapsed native details element on
+      # current builds. Select the exact unique actionable disclosure toggle.
+      $fileActionSummaries = @((Ui-Records $root) | Where-Object {
+        $_.Type -ceq 'ControlType.Button' -and
+        $_.Name -cin @('Optional file actions · approval required', 'Optional File Actions · Approval Required')
+      })
+      if ($fileActionSummaries.Count -ne 1) {
+        throw "Expected one optional native file action disclosure; found $($fileActionSummaries.Count)."
+      }
+      Ui-Invoke $fileActionSummaries[0]
       if ($null -eq (Ui-Wait $root 'Review a local file action' '' 9)) {
         throw 'Saved pending task does not expose manual local file controls.'
       }
