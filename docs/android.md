@@ -25,4 +25,4 @@ source revision, versioned checksums, SBOM/license review and verified public
 release provenance. Do not claim parity from a desktop mockup.
 
 The exact release blockers remain in **P19** and **P20** of
-[`docs/mission/active-task-plan.md`](mission/active-task-plan.md).
+[`docs/mission/active-task-plan.md`](mission/COMPLETE_EXECUTION_PLAN.md).

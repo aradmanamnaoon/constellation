@@ -71,4 +71,4 @@ Do not manually overwrite an open `constellation.sqlite3` or move recovered file
 | Local model cannot connect | Start the local model server and verify its configured loopback port and API format. |
 | No macOS/Linux/Android installer | These platforms have not been established as released/tested by this guide. |
 
-This is still an experimental app. See the [new-feature QA checklist](qa/new-native-feature-verification.md), [earlier Windows smoke evidence](qa/windows-native-smoke.md), and [known incomplete features](roadmap.md). Prior mock-provider test results and `[FIXTURE ONLY]` text are not evidence of real model capabilities.
+This is still an experimental app. See the [platform acceptance ledger](quality/acceptance-ledger.md), [earlier Windows smoke evidence](qa/windows-native-smoke.md), and [known incomplete features](roadmap.md). Prior mock-provider test results and `[FIXTURE ONLY]` text are not evidence of real model capabilities.

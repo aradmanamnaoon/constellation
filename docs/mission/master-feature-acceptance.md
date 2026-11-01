@@ -1,6 +1,6 @@
 # Constellation — master-specification feature acceptance map
 
-**Source:** `Codex_Master_Prompt_Local_Agent_Collaboration_Platform.md` (30 October 2026, 1,237 lines), particularly §20, §23–25, and §30. This is an **implementation and evidence checklist**, not a claim that these features exist. The core [23-workstream board](active-task-plan.md) and [188-row platform acceptance ledger](../quality/acceptance-ledger.md) remain authoritative. Source or isolated fixture evidence cannot substitute for installed-app validation.
+**Source:** `Codex_Master_Prompt_Local_Agent_Collaboration_Platform.md` (30 October 2026, 1,237 lines), particularly §20, §23–25, and §30. This is an **implementation and evidence checklist**, not a claim that these features exist. The core [23-workstream board](COMPLETE_EXECUTION_PLAN.md) and [188-row platform acceptance ledger](../quality/acceptance-ledger.md) remain authoritative. Source or isolated fixture evidence cannot substitute for installed-app validation.
 
 **Status convention:** `[ ]` means full end-to-end user acceptance remains open, even when a component exists or a narrow fixture has passed. An item closes only when its relevant feature, error/denial cases, persistent behavior and installed GUI are directly tested on a source-pinned build. The 40 differentiating product requirements below are separate from the 200 role templates and 200 verified skills/MCPs.
 

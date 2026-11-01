@@ -11,4 +11,4 @@ unsigned packages do not automatically advance an entire platform requirement.
 
 For specific source-pinned evidence, see
 [`docs/qa/`](./) and the
-[`23-workstream delivery board`](../mission/active-task-plan.md).
+[`23-workstream execution plan`](../mission/COMPLETE_EXECUTION_PLAN.md).

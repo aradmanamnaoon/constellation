@@ -22,12 +22,12 @@ tests with actual restricted PDF/DOCX fixtures; 24 protocol and 8 runner
 service tests, and 14 palette/plan Node tests. Native/Svelte check and build,
 strict native/Core/Evidence Clippy and fmt gates pass at those worktree
 checkpoints. Source paths, commands and limitations in
-[budget QA](../qa/core-desktop-budget-compatibility-2026-10-31.md),
-[saved Evidence](../qa/native-saved-evidence-2026-10-31.md),
-[PDF/DOCX preview](../qa/native-document-import-preview-2026-10-31.md),
-[host checkpoint](../qa/native-host-checkpoint-vault-2026-10-31.md),
-[runner](../qa/runner-sixth-wave-2026-10-31.md) and
-[CSS](../qa/css-accessibility-2026-10-31.md).
+budget QA *(unpublished historical local QA evidence)*,
+saved Evidence *(unpublished historical local QA evidence)*,
+PDF/DOCX preview *(unpublished historical local QA evidence)*,
+host checkpoint *(unpublished historical local QA evidence)*,
+runner *(unpublished historical local QA evidence)* and
+CSS *(unpublished historical local QA evidence)*.
 **All 188 platform rows below remain UNVERIFIED** until direct, source-pinned
 installed application, platform and hosted observations meet each row's
 required modality. No Git remote, push or public release was verified.
@@ -47,9 +47,9 @@ new Evidence export and was corrected; a follow-up lint/fmt run is required
 before claiming a clean complete source revision. All observations are limited
 to exact test scopes, not real deployed multi-agent OS containment, physical
 two-device cloud CAS or accessible installed GUI. See
-[Prime native integration](../qa/ninth-prime-native-integration-2026-10-31.md),
-[Tools](../qa/tool-containment-tenth-wave-2026-10-31.md), and
-[Sync](../qa/sync-conflict-tenth-wave-2026-10-31.md). Platform rows remain
+Prime native integration *(unpublished historical local QA evidence)*,
+Tools *(unpublished historical local QA evidence)*, and
+Sync *(unpublished historical local QA evidence)*. Platform rows remain
 UNVERIFIED; release remains blocked.
 
 ## Core functionality, security, performance, CI and release

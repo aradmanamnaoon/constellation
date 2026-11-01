@@ -224,9 +224,14 @@ assets/                 Original source vector emblem
 
 Documentation:
 
+The development repository excludes certain host-specific historical QA
+receipts, private screenshots and internal working notes. References to those
+records are descriptive only, not independently downloadable release evidence.
+The tracked acceptance ledger records the remaining verification requirements.
+
 - [Architecture decision](docs/architecture-decision.md)
 - [Acceptance ledger](docs/quality/acceptance-ledger.md)
-- [Active delivery task plan and completion blockers](docs/mission/active-task-plan.md)
+- [Active delivery task plan and completion blockers](docs/mission/COMPLETE_EXECUTION_PLAN.md)
 - [Initial threat model](docs/security/initial-threat-model.md)
 - [Native Windows GUI smoke evidence](docs/qa/windows-native-smoke.md)
 - [Getting started](docs/getting-started.md)

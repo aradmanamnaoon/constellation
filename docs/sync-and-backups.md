@@ -37,5 +37,5 @@ there is no operator-hosted free storage guarantee.
 Reproduce the local protocol test suite with
 `cargo test --manifest-path crates/constellation-sync/Cargo.toml --locked --offline`.
 See tasks **P16–P17** in the
-[`23-workstream plan`](mission/active-task-plan.md) and precise
+[`23-workstream plan`](mission/COMPLETE_EXECUTION_PLAN.md) and precise
 [`acceptance inventory`](quality/acceptance-ledger.md).

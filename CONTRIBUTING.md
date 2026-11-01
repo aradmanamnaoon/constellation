@@ -2,7 +2,7 @@
 
 Constellation is under active development and not yet a validated public
 release. Before changes, read [`AGENTS.md`](AGENTS.md), the
-[`23-workstream plan`](docs/mission/active-task-plan.md), and the
+[`23-workstream plan`](docs/mission/COMPLETE_EXECUTION_PLAN.md), and the
 [`188-requirement acceptance inventory`](docs/quality/acceptance-ledger.md).
 
 ## Working on code

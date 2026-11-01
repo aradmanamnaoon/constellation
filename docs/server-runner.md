@@ -33,4 +33,4 @@ VM resources and any storage are the user's own resources and may incur costs.
 The source tests can be run from the repository root with
 `cargo test --manifest-path crates/constellation-runner-protocol/Cargo.toml --locked --offline`.
 These prove protocol invariants only. See
-[`docs/mission/active-task-plan.md`](mission/active-task-plan.md) task **P18**.
+[`docs/mission/active-task-plan.md`](mission/COMPLETE_EXECUTION_PLAN.md) task **P18**.

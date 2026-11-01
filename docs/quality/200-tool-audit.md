@@ -42,7 +42,7 @@ It deliberately invalidates previously qualified receipts if source inputs
 change. Since Constellation is undergoing concurrent development, always
 rerun these commands against the actual current checkout before citing a
 strict tally. The developer audit record is
-[`docs/qa/skills-expansion-2026-10-30.md`](../qa/skills-expansion-2026-10-30.md).
+`docs/qa/skills-expansion-2026-10-30.md` *(unpublished historical local QA evidence)*.
 
 ## Required work per remaining integration
 

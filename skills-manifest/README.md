@@ -22,7 +22,7 @@ strict current-source gate**. These are different counts. Never use the
 recorded installed count as the verified acceptance score. Once all active
 source owners finish, rerun `requalify-stable.mjs --check` on a frozen input
 set and refresh only stable passing skills before rechecking the score.
-See [twenty-fifth-wave QA](../docs/qa/skills-twenty-fifth-wave-2026-10-31.md).
+See twenty-fifth-wave QA *(unpublished historical local QA evidence)*.
 
 **Twenty-second wave (31 October 2026), observed source snapshot:**
 Strict local independent replay accepts **34/200** development skill
@@ -35,7 +35,7 @@ before an authorized SHA-bound receipt refresh. The full skills Node suite
 passed **89/89**; original 20-name source audit still checks all 20,
 with 12 promoted and 8 source-reviewed/uninstalled. The 158 user-level
 skill entries are unvetted. Source changes can revoke strict credit.
-See [twenty-second-wave QA](../docs/qa/skills-twenty-second-wave-2026-10-31.md).
+See twenty-second-wave QA *(unpublished historical local QA evidence)*.
 
 **Nineteenth-wave qualification, source-bound status (31 October 2026):**
 Two additional original MIT/source-reviewed candidate skills were installed
@@ -53,7 +53,7 @@ Refresh only after concurrent native/runner source freeze, when independent
 replay succeeds; then verify the current count again. Ten original candidates
 remain source-reviewed/uninstalled, 158 user-level skills are unvetted and
 there are zero verified MCP runtimes. See
-[nineteenth-wave QA](../docs/qa/skills-nineteenth-wave-2026-10-31.md).
+nineteenth-wave QA *(unpublished historical local QA evidence)*.
 
 **Eighteenth-wave source-bound result (31 October 2026):** The unchanged
 strict `node skills-manifest/validate.mjs --verify-local` accepted **30/200**
@@ -68,7 +68,7 @@ limited, transparent Constellation source-contract tests. The original
 skills. None of the 158 unvetted user-level entries or MCP runtimes receives
 credit. Re-run strict validation after any concurrent native/frontend source
 change. See
-[eighteenth-wave QA](../docs/qa/skills-eighteenth-wave-2026-10-31.md).
+eighteenth-wave QA *(unpublished historical local QA evidence)*.
 
 **Seventeenth-wave observed source snapshot (31 October 2026):** Strict
 `node skills-manifest/validate.mjs --verify-local` passed with **26/200**
@@ -82,7 +82,7 @@ The original 20-source cohort remains explicitly audited: 16 uninstalled,
 four promoted, zero qualified MCP runtimes; 158 user-level entries remain
 unvetted. Other agents may change receipt inputs, so rerun the strict command
 before relying on this count. See
-[the seventeenth-wave audit](../docs/qa/skills-expansion-seventeenth-wave-2026-10-31.md).
+the seventeenth-wave audit *(unpublished historical local QA evidence)*.
 
 **Sixteenth-wave local qualification (31 October 2026):** All 22 historical
 managed skill installations were individually replayed twice, then each
@@ -96,7 +96,7 @@ remaining**. This is a local source-bound snapshot, not proof of an installed
 GUI, external MCP runtime, production security, hosted CI or public release.
 Re-run the strict command after any native, frontend, mission, runner or skill
 source change: the score must fall when evidence is stale. See
-[the sixteenth-wave audit](../docs/qa/skills-qualification-sixteenth-wave-2026-10-31.md).
+the sixteenth-wave audit *(unpublished historical local QA evidence)*.
 
 The offline refresh script at skills-manifest/requalify-stable.mjs supports
 --check (read-only two-run source exercise stability, pinned Git revision and
@@ -196,7 +196,7 @@ actual managed installation presence. It runs no candidate instructions and
 grants **zero qualification credit**, even if an exact file happens to be
 installed without a passing Constellation-specific exercise. Its three negative
 tests reject forged hashes, switched sources/licenses and traversal paths.
-See [the 31 October audit](../docs/qa/skills-qualification-current-2026-10-31.md)
+See the 31 October audit *(unpublished historical local QA evidence)*
 for the source-change/requalification caveat.
 
 The read-only source discovery command `node
@@ -312,6 +312,6 @@ then `validate.mjs --verify-local` and the test suite before reporting
 the final count. `--require-target` must continue to
 fail until all 200 are demonstrably qualified.
 
-See [the original 30 October strict audit](../docs/qa/skills-current-2026-10-30.md)
+See the original 30 October strict audit *(unpublished historical local QA evidence)*
 for the earlier baseline and blockers; use `validate.mjs --verify-local` for
 the authoritative current local count and per-skill receipts under `evidence/`.

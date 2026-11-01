@@ -93,7 +93,7 @@ that entry on exit; it never uses the active project's credential namespace.
 The source-pinned SHA-bound Windows candidate passed a real **five-dialog**
 unselected-desktop GUI sequence, including an equal-length file mutation
 after read preview, which was rejected without content disclosure. See
-[`docs/qa/windows-sha-bound-read-private-2026-10-30.md`](qa/windows-sha-bound-read-private-2026-10-30.md)
+`docs/qa/windows-sha-bound-read-private-2026-10-30.md` *(unpublished historical local QA evidence)*
 for its executable checksum and 14 matching journal envelopes. **Later
 concurrent source changes have not been requalified as a new Windows
 installer**, so the frozen candidate's result applies only to its recorded
