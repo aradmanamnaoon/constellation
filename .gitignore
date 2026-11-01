@@ -5,6 +5,9 @@
 **/build/
 **/dist/
 **/.vite/
+**/__pycache__/
+*.py[cod]
+*.pyo
 
 # Local runtime state and secrets.
 *.sqlite
@@ -27,3 +30,7 @@
 # Never stage installed binaries, sample workspace data or uninstallers.
 /qa-installed/
 /qa-*/
+
+# Standalone Rust applications and crates require versioned locks for CI.
+!/crates/*/Cargo.lock
+!/apps/desktop/src-tauri/Cargo.lock

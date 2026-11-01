@@ -19,6 +19,8 @@ pub use models::{
 pub use permissions::{PermissionGate, PermissionScope, ToolAction};
 pub use provider::{
     ChatCompletionRequest, ChatEntry, ChatRole, CredentialSource, OpenAiCompatibleAdapter,
-    PreparedRequest, ProviderAdapter, ProviderProfile,
+    PreparedRequest, ProviderAdapter, ProviderKind, ProviderProfile,
 };
-pub use store::StudioStore;
+pub use store::{
+    verify_initialized_schema, StudioStore, EVIDENCE_LIBRARY_DDL, PROPOSAL_BUDGET_DDL,
+};

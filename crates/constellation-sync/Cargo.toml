@@ -1,0 +1,22 @@
+[package]
+name = "constellation-sync"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+description = "Encrypted revision sync with gated S3 HTTPS conditional CAS storage"
+
+[dependencies]
+constellation-backup = { path = "../constellation-backup" }
+sha2 = "0.10"
+thiserror = "2"
+zeroize = "1.8"
+rusqlite = { version = "0.38", features = ["bundled"] }
+reqwest = { version = "=0.12.28", default-features = false, features = ["blocking", "rustls-tls"] }
+url = "2.5"
+hmac = "0.12"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+getrandom = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

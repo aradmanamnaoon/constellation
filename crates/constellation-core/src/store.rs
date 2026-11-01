@@ -1,22 +1,194 @@
 use std::{
     path::Path,
     sync::{Mutex, MutexGuard},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
+use rusqlite::{
+    params, Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior,
+};
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
     Agent, AgentId, CoreError, Event, EventKind, Message, MessageId, MessageSender, OperationId,
-    ProviderProfile, Result, Room, RoomId, StudioSnapshot, Task, TaskId, TaskState,
+    ProviderId, ProviderProfile, Result, Room, RoomId, StudioSnapshot, Task, TaskId, TaskState,
 };
 
 /// SQLite-backed studio state. Every mutation and its audit event are committed
 /// atomically. The mutex also makes this store safe to share across UI threads.
 pub struct StudioStore {
     connection: Mutex<Connection>,
+}
+
+/// The first explicitly versioned layout is byte-for-byte compatible with
+/// the formerly shipped, unversioned six-table schema. Never infer a foreign
+/// database's identity just from coincidentally named tables.
+const STORE_SCHEMA_VERSION: i64 = 1;
+const STORE_SCHEMA_DDL: &str = "CREATE TABLE IF NOT EXISTS rooms (
+             id TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS agents (
+             id TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS messages (
+             id TEXT PRIMARY KEY NOT NULL, room_id TEXT NOT NULL,
+             data TEXT NOT NULL,
+             FOREIGN KEY(room_id) REFERENCES rooms(id)
+         );
+         CREATE TABLE IF NOT EXISTS tasks (
+             id TEXT PRIMARY KEY NOT NULL,
+             room_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+             data TEXT NOT NULL,
+             FOREIGN KEY(room_id) REFERENCES rooms(id),
+             FOREIGN KEY(agent_id) REFERENCES agents(id)
+         );
+         CREATE TABLE IF NOT EXISTS providers (
+             id TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS events (
+             sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+             operation_id TEXT UNIQUE NOT NULL,
+             fingerprint TEXT NOT NULL,
+             occurred_at_ms INTEGER NOT NULL,
+             kind TEXT NOT NULL,
+             result TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS messages_room_index ON messages(room_id);";
+
+/// The native host has historically reserved billable model-proposal attempts
+/// in the *same* StudioStore SQLite file. Those two tables are a known,
+/// optional extension, not a foreign database. Share the exact DDL with the
+/// host so a restart after a successful reservation cannot brick the store.
+/// Both tables must be present with exactly this layout, or neither may be.
+pub const PROPOSAL_BUDGET_DDL: &str = "CREATE TABLE IF NOT EXISTS file_proposal_task_budget (
+           task_id TEXT PRIMARY KEY NOT NULL,
+           attempts INTEGER NOT NULL CHECK (attempts >= 1 AND attempts <= 16)
+         );
+         CREATE TABLE IF NOT EXISTS file_proposal_provider_budget (
+           provider_id TEXT PRIMARY KEY NOT NULL,
+           attempts INTEGER NOT NULL CHECK (attempts >= 1 AND attempts <= 128)
+         );";
+
+/// Saved evidence shares the project SQLite file and its existing encrypted
+/// archive boundary. Pasted-only searches never create this optional table.
+pub const EVIDENCE_LIBRARY_DDL: &str = "CREATE TABLE IF NOT EXISTS evidence_sources (
+           source_id TEXT PRIMARY KEY NOT NULL,
+           title TEXT NOT NULL,
+           source_format TEXT NOT NULL CHECK (source_format IN ('markdown','plain_text')),
+           source_text TEXT NOT NULL,
+           source_sha256 TEXT NOT NULL,
+           source_bytes INTEGER NOT NULL CHECK (source_bytes > 0 AND source_bytes <= 131072)
+         );";
+
+type SchemaObjects = Vec<(String, String, String)>;
+
+fn schema_objects(conn: &Connection) -> Result<SchemaObjects> {
+    let mut stmt = conn.prepare(
+        "SELECT type, name, sql FROM sqlite_master
+         WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name",
+    )?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+    rows.collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(Into::into)
+}
+
+/// SQLite stores the original CREATE SQL in sqlite_master. Compare the entire
+/// known schema (tables, indexes, triggers and views), not only table names.
+/// This intentionally rejects unrecognized "compatible-looking" layouts
+/// rather than guessing a migration for a foreign or previously modified DB.
+fn known_schema() -> Result<SchemaObjects> {
+    let reference = Connection::open_in_memory()?;
+    reference.execute_batch(STORE_SCHEMA_DDL)?;
+    schema_objects(&reference)
+}
+
+fn known_schema_with_extensions(budgets: bool, evidence: bool) -> Result<SchemaObjects> {
+    let reference = Connection::open_in_memory()?;
+    reference.execute_batch(STORE_SCHEMA_DDL)?;
+    if budgets {
+        reference.execute_batch(PROPOSAL_BUDGET_DDL)?;
+    }
+    if evidence {
+        reference.execute_batch(EVIDENCE_LIBRARY_DDL)?;
+    }
+    schema_objects(&reference)
+}
+
+fn schema_state(conn: &Connection) -> Result<bool> {
+    let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version != 0 && version != STORE_SCHEMA_VERSION {
+        return Err(CoreError::UnsupportedSchemaVersion(version));
+    }
+    let present = schema_objects(conn)?;
+    if present.is_empty() && version == 0 {
+        // A truly new SQLite database has no sqlite_master entries. An
+        // unrelated AUTOINCREMENT table can leave sqlite_sequence behind
+        // after DROP TABLE: treating that as fresh would adopt a foreign DB.
+        let internal_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| row.get(0))?;
+        if internal_count != 0 {
+            return Err(CoreError::UnrecognizedSchema);
+        }
+        return Ok(true); // Fresh database; create known schema atomically.
+    }
+    if present == known_schema()?
+        || present == known_schema_with_extensions(true, false)?
+        || present == known_schema_with_extensions(false, true)?
+        || present == known_schema_with_extensions(true, true)?
+    {
+        return Ok(version == 0); // Exact unversioned layout: version-only migration.
+    }
+    Err(CoreError::UnrecognizedSchema)
+}
+
+/// Validate the exact committed Constellation layout on a caller-owned SQLite
+/// connection or transaction, without migrating or writing anything. The
+/// native host must use this *inside* its budget transaction so a replaced
+/// table, weakened CHECK constraint, or foreign DB cannot authorize a model
+/// request between desktop startup and the subsequent billable dispatch.
+/// A version-zero database needs migration through `StudioStore::open` first.
+pub fn verify_initialized_schema(conn: &Connection) -> Result<()> {
+    if schema_state(conn)? {
+        return Err(CoreError::UnrecognizedSchema);
+    }
+    Ok(())
+}
+
+fn initialize_schema(conn: &mut Connection) -> Result<()> {
+    // Keep *all* preflight reads in one SQLite snapshot. Two independent
+    // first-openers may race: without a read transaction, user_version and
+    // the user tables could be observed before another writer commits while
+    // the subsequent sqlite_master internal-count query observes its newly
+    // committed sqlite_sequence. That inconsistent cross-statement view
+    // falsely classifies a genuine Constellation database as foreign.
+    // A deferred read transaction must end BEFORE activating WAL; it never
+    // migrates or changes the journal mode of an unrecognized database.
+    {
+        let preflight = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        schema_state(&preflight)?;
+        preflight.commit()?;
+    }
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "FULL")?;
+    // Foreign keys must be enabled before BEGIN; SQLite ignores changes
+    // to that pragma inside a transaction. A failed schema upgrade must
+    // roll back *all* DDL, including tables created before a later error.
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    let schema = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // Re-check after acquiring the writer lock: another process might have
+    // initialized or upgraded the database after our read-only preflight.
+    let needs_migration = schema_state(&schema)?;
+    if needs_migration {
+        if schema_objects(&schema)?.is_empty() {
+            schema.execute_batch(STORE_SCHEMA_DDL)?;
+        }
+        // DDL and the version update commit together. Errors (disk full,
+        // injected SQL failure or process interruption) leave user_version=0.
+        schema.pragma_update(None, "user_version", STORE_SCHEMA_VERSION)?;
+    }
+    schema.commit()?;
+    Ok(())
 }
 
 impl StudioStore {
@@ -30,45 +202,34 @@ impl StudioStore {
         {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "FULL")?;
-        conn.execute_batch(
-            "PRAGMA foreign_keys = ON;
-             CREATE TABLE IF NOT EXISTS rooms (
-                 id TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS agents (
-                 id TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS messages (
-                 id TEXT PRIMARY KEY NOT NULL, room_id TEXT NOT NULL,
-                 data TEXT NOT NULL,
-                 FOREIGN KEY(room_id) REFERENCES rooms(id)
-             );
-             CREATE TABLE IF NOT EXISTS tasks (
-                 id TEXT PRIMARY KEY NOT NULL,
-                 room_id TEXT NOT NULL, agent_id TEXT NOT NULL,
-                 data TEXT NOT NULL,
-                 FOREIGN KEY(room_id) REFERENCES rooms(id),
-                 FOREIGN KEY(agent_id) REFERENCES agents(id)
-             );
-             CREATE TABLE IF NOT EXISTS providers (
-                 id TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL
-             );
-             CREATE TABLE IF NOT EXISTS events (
-                 sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-                 operation_id TEXT UNIQUE NOT NULL,
-                 fingerprint TEXT NOT NULL,
-                 occurred_at_ms INTEGER NOT NULL,
-                 kind TEXT NOT NULL,
-                 result TEXT NOT NULL
-             );
-             CREATE INDEX IF NOT EXISTS messages_room_index ON messages(room_id);",
-        )?;
-        Ok(Self {
-            connection: Mutex::new(conn),
-        })
+        let mut conn = Connection::open(path)?;
+        // A single SQLite busy wait must not consume the entire retry
+        // budget. Use a short busy timeout during schema admission only,
+        // then restore a generous timeout for ordinary task/event writes.
+        conn.busy_timeout(Duration::from_millis(25))?;
+        // Initial WAL activation can return SQLITE_BUSY immediately while
+        // another process is opening the same brand-new database. Bounded
+        // retries are safe because schema DDL is atomic below.
+        for attempt in 0..=40 {
+            match initialize_schema(&mut conn) {
+                Ok(()) => {
+                    conn.busy_timeout(Duration::from_secs(5))?;
+                    return Ok(Self {
+                        connection: Mutex::new(conn),
+                    });
+                }
+                Err(CoreError::Database(rusqlite::Error::SqliteFailure(err, _)))
+                    if matches!(
+                        err.code,
+                        ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked
+                    ) && attempt < 40 =>
+                {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("initialization either succeeds or returns the final error")
     }
 
     pub fn snapshot(&self) -> Result<StudioSnapshot> {
@@ -183,6 +344,7 @@ impl StudioStore {
             id: agent_id,
             role,
             name,
+            provider_id: None,
             created_at_ms: now_ms(),
         };
         if id_exists(&tx, "agents", &agent_id.to_string())? {
@@ -197,6 +359,58 @@ impl StudioStore {
             operation_id,
             &fingerprint,
             EventKind::AgentAdded { agent_id: agent.id },
+            &agent,
+        )?;
+        tx.commit()?;
+        Ok(agent)
+    }
+
+    /// Changes the preferred provider for one agent. There is no implicit
+    /// fallback to a different provider, and preference alone never dispatches
+    /// a network request. The change is atomically audited in the event log.
+    pub fn set_agent_provider(
+        &self,
+        agent_id: AgentId,
+        provider_id: Option<ProviderId>,
+        operation_id: OperationId,
+    ) -> Result<Agent> {
+        let fingerprint = json!({
+            "op": "set_agent_provider",
+            "agent_id": agent_id,
+            "provider_id": provider_id,
+        });
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(previous) = previous_result::<Agent>(&tx, operation_id, &fingerprint)? {
+            return Ok(previous);
+        }
+        let mut agent: Agent =
+            read_one(&tx, "agents", &agent_id.to_string())?.ok_or(CoreError::NotFound("agent"))?;
+        if let Some(id) = provider_id {
+            let present: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM providers WHERE id = ?1",
+                    [id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if present.is_none() {
+                return Err(CoreError::NotFound("provider"));
+            }
+        }
+        agent.provider_id = provider_id;
+        tx.execute(
+            "UPDATE agents SET data = ?2 WHERE id = ?1",
+            params![agent_id.to_string(), serde_json::to_string(&agent)?],
+        )?;
+        record_event(
+            &tx,
+            operation_id,
+            &fingerprint,
+            EventKind::AgentProviderChanged {
+                agent_id,
+                provider_id,
+            },
             &agent,
         )?;
         tx.commit()?;
@@ -579,6 +793,7 @@ fn read_one<T: DeserializeOwned>(
 ) -> Result<Option<T>> {
     let sql = match table {
         "tasks" => "SELECT data FROM tasks WHERE id = ?1",
+        "agents" => "SELECT data FROM agents WHERE id = ?1",
         _ => return Err(CoreError::InvalidInput("unknown table".into())),
     };
     let data: Option<String> = tx.query_row(sql, [id], |row| row.get(0)).optional()?;

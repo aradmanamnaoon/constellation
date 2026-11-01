@@ -1,0 +1,21 @@
+[package]
+name = "constellation-project-backup"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+description = "Offline bounded encrypted archives for the two Constellation SQLite databases"
+
+[dependencies]
+constellation-backup = { path = "../constellation-backup" }
+rusqlite = { version = "0.38.0", features = ["backup", "bundled", "serialize"] }
+sha2 = "0.10"
+thiserror = "2"
+zeroize = "1.8"
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

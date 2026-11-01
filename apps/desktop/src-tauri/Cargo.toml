@@ -21,14 +21,31 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "0.38", features = ["bundled"] }
 constellation-core = { path = "../../../crates/constellation-core" }
+constellation-provider-probe = { path = "../../../crates/constellation-provider-probe" }
+constellation-provider-adapters = { path = "../../../crates/constellation-provider-adapters" }
+constellation-evidence = { path = "../../../crates/constellation-evidence" }
+constellation-workflows = { path = "../../../crates/constellation-workflows" }
+constellation-backup = { path = "../../../crates/constellation-backup" }
+constellation-backup-cli = { path = "../../../crates/constellation-backup-cli" }
+constellation-project-backup = { path = "../../../crates/constellation-project-backup" }
+constellation-tools = { path = "../../../crates/constellation-tools" }
+constellation-agent-loop = { path = "../../../crates/constellation-agent-loop" }
+constellation-credential-vault = { path = "../../../crates/constellation-credential-vault" }
+keyring = "3.6"
+sha2 = "0.10"
+ring = "0.17"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["time", "sync"] }
 futures-util = "0.3"
 zeroize = "1.9"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 tempfile = "3"
+zip = { version = "=4.6.1", default-features = false, features = ["deflate-flate2"] }
+lopdf = { version = "=0.35.0", default-features = false, features = ["nom_parser"] }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

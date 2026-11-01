@@ -1,0 +1,11 @@
+[package]
+name = "constellation-provider-adapters"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Bounded, deterministic text-chat wire adapters for Constellation"
+
+[dependencies]
+constellation-core = { path = "../constellation-core" }
+serde_json = "1"
+url = "2"

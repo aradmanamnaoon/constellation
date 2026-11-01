@@ -50,6 +50,10 @@ pub struct Agent {
     pub id: AgentId,
     pub role: String,
     pub name: String,
+    /// Optional user-selected provider affinity. Legacy agent rows deserialize
+    /// without this key; model routing still requires an explicit UI action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<ProviderId>,
     pub created_at_ms: i64,
 }
 
@@ -129,6 +133,10 @@ pub enum EventKind {
     },
     AgentAdded {
         agent_id: AgentId,
+    },
+    AgentProviderChanged {
+        agent_id: AgentId,
+        provider_id: Option<ProviderId>,
     },
     MessageAppended {
         message_id: MessageId,

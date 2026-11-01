@@ -128,6 +128,48 @@ fn failed_create_new_does_not_replace_an_existing_file_or_authorize_replay() {
 }
 
 #[test]
+fn replacing_an_approved_file_with_an_external_hardlink_discloses_no_content() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let in_root = workspace.path().join("notes.txt");
+    let secret = outside.path().join("private-outside.txt");
+    fs::write(&in_root, "approved harmless text").unwrap();
+    fs::write(&secret, "outside private text").unwrap();
+
+    let tool = executor(workspace.path());
+    let prepared = tool
+        .prepare(
+            context(),
+            OperationRequest::Read {
+                path: "notes.txt".into(),
+            },
+        )
+        .unwrap();
+    let mut gate = PermissionGate::new();
+    gate.grant(prepared.scope().clone()).unwrap();
+    let approval = tool.approve(&gate, OperationId::new(), &prepared).unwrap();
+
+    // The user approved the original file, then a different local process
+    // replaced the exact same path with a hardlink to outside the workspace.
+    fs::remove_file(&in_root).unwrap();
+    fs::hard_link(&secret, &in_root).unwrap();
+    let (receipt, output) = tool
+        .execute(&gate, &approval, prepared, &CancellationToken::new())
+        .unwrap();
+    assert_eq!(receipt.outcome, OperationOutcome::Failed);
+    assert_eq!(
+        receipt.failure_reason.as_deref(),
+        Some("files with multiple hardlinks are not eligible for workspace read approval")
+    );
+    assert!(output.is_none());
+    assert_eq!(fs::read_to_string(&secret).unwrap(), "outside private text");
+    assert_eq!(
+        fs::read_to_string(&in_root).unwrap(),
+        "outside private text"
+    );
+}
+
+#[test]
 fn executable_changed_after_approval_is_rejected_and_receipted() {
     let workspace = tempfile::tempdir().unwrap();
     let executable = workspace.path().join(if cfg!(windows) {
@@ -228,6 +270,181 @@ fn malformed_process_args_and_timeout_are_rejected_without_launch() {
             Err(ToolError::InvalidCommand)
         ));
     }
+}
+
+#[test]
+fn command_permission_binds_arguments_working_directory_and_timeout() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::create_dir(workspace.path().join("nested")).unwrap();
+    let tool = executor(workspace.path());
+    let ctx = context();
+    let executable = std::env::current_exe().unwrap();
+    let prepare = |working_dir: PathBuf, args: Vec<String>, timeout: Duration| {
+        tool.prepare(
+            ctx,
+            OperationRequest::Process {
+                executable: executable.clone(),
+                working_dir,
+                args,
+                timeout,
+            },
+        )
+        .unwrap()
+    };
+    let approved = prepare(
+        PathBuf::new(),
+        vec!["--list".into()],
+        Duration::from_secs(2),
+    );
+    let changed_args = prepare(
+        PathBuf::new(),
+        vec!["--help".into()],
+        Duration::from_secs(2),
+    );
+    let changed_dir = prepare(
+        "nested".into(),
+        vec!["--list".into()],
+        Duration::from_secs(2),
+    );
+    let changed_timeout = prepare(
+        PathBuf::new(),
+        vec!["--list".into()],
+        Duration::from_secs(3),
+    );
+    let mut gate = PermissionGate::new();
+    gate.grant(approved.scope().clone()).unwrap();
+    for operation in [&changed_args, &changed_dir, &changed_timeout] {
+        assert_ne!(approved.scope().resource, operation.scope().resource);
+        assert!(matches!(
+            tool.approve(&gate, OperationId::new(), operation),
+            Err(ToolError::PermissionDenied)
+        ));
+    }
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn approved_process_refuses_working_directory_replaced_with_symlink() {
+    let workspace = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let safe = workspace.path().join("safe");
+    fs::create_dir(&safe).unwrap();
+    let tool = executor(workspace.path());
+    let ctx = context();
+    let request = || process_request(std::env::current_exe().unwrap(), "safe".into());
+    let prepared = tool.prepare(ctx, request()).unwrap();
+    let mut gate = PermissionGate::new();
+    gate.grant(prepared.scope().clone()).unwrap();
+    let approval = tool.approve(&gate, OperationId::new(), &prepared).unwrap();
+    fs::remove_dir(&safe).unwrap();
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_dir(outside.path(), &safe);
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(outside.path(), &safe);
+    if made.is_err() {
+        // Symlink privileges can be unavailable on Windows.
+        return;
+    }
+    let (receipt, output) = tool
+        .execute(&gate, &approval, prepared, &CancellationToken::new())
+        .unwrap();
+    assert_eq!(receipt.outcome, OperationOutcome::Failed);
+    assert!(output.is_none());
+    assert!(!outside.path().join("created.txt").exists());
+}
+
+#[test]
+fn approved_process_refuses_ordinary_directory_replacement_and_consumes_approval() {
+    let workspace = tempfile::tempdir().unwrap();
+    let safe = workspace.path().join("safe");
+    let displaced = workspace.path().join("displaced");
+    fs::create_dir(&safe).unwrap();
+    let tool = executor(workspace.path());
+    let ctx = context();
+    let request = || process_request(std::env::current_exe().unwrap(), "safe".into());
+    let prepared = tool.prepare(ctx, request()).unwrap();
+    let mut gate = PermissionGate::new();
+    gate.grant(prepared.scope().clone()).unwrap();
+    let approval = tool.approve(&gate, OperationId::new(), &prepared).unwrap();
+
+    // No symlink is involved: a normal directory has been replaced with a
+    // second, different inode/file ID at exactly the same approved pathname.
+    fs::rename(&safe, &displaced).unwrap();
+    fs::create_dir(&safe).unwrap();
+    let reapproved_path = tool.prepare(ctx, request()).unwrap();
+    assert_ne!(prepared.digest(), reapproved_path.digest());
+    let (receipt, output) = tool
+        .execute(&gate, &approval, prepared, &CancellationToken::new())
+        .unwrap();
+    assert_eq!(receipt.outcome, OperationOutcome::Failed);
+    assert!(output.is_none());
+    assert!(matches!(
+        tool.execute(&gate, &approval, reapproved_path, &CancellationToken::new()),
+        Err(ToolError::ApprovalMismatch)
+    ));
+    fs::remove_dir(&safe).unwrap();
+    fs::rename(&displaced, &safe).unwrap();
+    // Recreating the originally approved inode still does not revive a
+    // consumed approval. Identical path and digest cannot bypass replay.
+    let replay = tool.prepare(ctx, request()).unwrap();
+    assert!(matches!(
+        tool.execute(&gate, &approval, replay, &CancellationToken::new()),
+        Err(ToolError::OperationReplay)
+    ));
+}
+
+#[test]
+fn git_status_refuses_replaced_repository_directory_before_spawning() {
+    let workspace = tempfile::tempdir().unwrap();
+    let repo = workspace.path().join("repository");
+    fs::create_dir(&repo).unwrap();
+    fs::create_dir(repo.join(".git")).unwrap();
+    let tool = executor(workspace.path());
+    let ctx = context();
+    let request = || OperationRequest::Git {
+        executable: std::env::current_exe().unwrap(),
+        repository: "repository".into(),
+        action: GitAction::Status,
+        timeout: Duration::from_secs(2),
+    };
+    let prepared = tool.prepare(ctx, request()).unwrap();
+    let mut gate = PermissionGate::new();
+    gate.grant(prepared.scope().clone()).unwrap();
+    let approval = tool.approve(&gate, OperationId::new(), &prepared).unwrap();
+    fs::rename(&repo, workspace.path().join("former")).unwrap();
+    fs::create_dir(&repo).unwrap();
+    fs::create_dir(repo.join(".git")).unwrap();
+    let replacement = tool.prepare(ctx, request()).unwrap();
+    assert_ne!(prepared.digest(), replacement.digest());
+    let (receipt, result) = tool
+        .execute(&gate, &approval, prepared, &CancellationToken::new())
+        .unwrap();
+    assert_eq!(receipt.outcome, OperationOutcome::Failed);
+    assert!(result.is_none());
+}
+
+#[test]
+fn cancelled_process_approval_never_spawns_and_cannot_be_replayed() {
+    let workspace = tempfile::tempdir().unwrap();
+    let tool = executor(workspace.path());
+    let ctx = context();
+    let request = || process_request(std::env::current_exe().unwrap(), PathBuf::new());
+    let prepared = tool.prepare(ctx, request()).unwrap();
+    let mut gate = PermissionGate::new();
+    gate.grant(prepared.scope().clone()).unwrap();
+    let approval = tool.approve(&gate, OperationId::new(), &prepared).unwrap();
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let (receipt, output) = tool
+        .execute(&gate, &approval, prepared, &cancelled)
+        .unwrap();
+    assert_eq!(receipt.outcome, OperationOutcome::Cancelled);
+    assert!(output.is_none());
+    let replay = tool.prepare(ctx, request()).unwrap();
+    assert!(matches!(
+        tool.execute(&gate, &approval, replay, &CancellationToken::new()),
+        Err(ToolError::OperationReplay)
+    ));
 }
 
 #[test]

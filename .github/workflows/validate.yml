@@ -8,17 +8,90 @@ permissions:
   contents: read
 
 jobs:
+  dependency-lockfiles:
+    name: Complete committed source and frozen dependency inventory
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Enforce source inventory and adversarial CI policy (eleventh wave)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node .github/workflows/source-gate.mjs
+          node --test tests/ci-source-gate-eleventh-wave.test.mjs
+      - name: Require all expected standalone source trees and lockfiles in Git
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          # An incomplete checkout must not silently pass when an entire new
+          # crate (and therefore its Cargo.toml) has never been committed.
+          expected_crates=(
+            constellation-agent-loop constellation-backup constellation-backup-cli
+            constellation-core constellation-credential-vault constellation-evidence
+            constellation-project-backup constellation-provider-adapters
+            constellation-provider-probe constellation-runner-protocol
+            constellation-runner-service
+            constellation-sync constellation-tools constellation-workflows
+          )
+          for crate in "${expected_crates[@]}"; do
+            for file in "crates/$crate/Cargo.toml" "crates/$crate/Cargo.lock" "crates/$crate/src/lib.rs"; do
+              if [[ ! -f "$file" ]] || ! git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+                echo "::error file=$file::Required crate source/lock missing from committed checkout."
+                missing=1
+              fi
+            done
+          done
+          for file in \
+            crates/constellation-backup-cli/src/main.rs \
+            apps/desktop/package.json apps/desktop/pnpm-lock.yaml \
+            apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock \
+            apps/desktop/src-tauri/src/lib.rs apps/desktop/src-tauri/tauri.conf.json \
+            apps/desktop/src/routes/+page.svelte apps/desktop/src/routes/studio.css \
+            catalog/build-roles.mjs catalog/roles.test.mjs \
+            skills-manifest/inventory.json skills-manifest/validate.mjs \
+            skills-manifest/validate.test.mjs skills-manifest/reviewed-exercise.test.mjs \
+            tests/release-readiness.ps1; do
+            if [[ ! -f "$file" ]] || ! git ls-files --error-unmatch -- "$file" >/dev/null 2>&1; then
+              echo "::error file=$file::Required project source is absent from the Git index."
+              missing=1
+            fi
+          done
+          for manifest in crates/*/Cargo.toml apps/desktop/src-tauri/Cargo.toml; do
+            lock="${manifest%Cargo.toml}Cargo.lock"
+            if [[ ! -f "$lock" ]] || ! git ls-files --error-unmatch -- "$lock" >/dev/null 2>&1; then
+              echo "::error file=$lock::Commit the corresponding Cargo.lock before requesting --locked validation."
+              missing=1
+            fi
+          done
+          # Check Rust/frontend and automation/test source, including files
+          # omitted by an accidentally incomplete staging operation.
+          while IFS= read -r -d '' source; do
+            if ! git ls-files --error-unmatch -- "$source" >/dev/null 2>&1; then
+              echo "::error file=$source::Source file exists locally but is not committed."
+              missing=1
+            fi
+          done < <(find crates apps/desktop/src-tauri/src apps/desktop/src \
+            catalog skills-manifest tests \
+            -type f \( -name '*.rs' -o -name '*.svelte' -o -name '*.css' \
+              -o -name '*.ts' -o -name '*.js' -o -name '*.mjs' -o -name '*.ps1' \) \
+            -not -path '*/target/*' -not -path '*/node_modules/*' -print0)
+          test "$missing" -eq 0
+
   core:
     name: Rust core (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-2025, macos-15]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.99.1
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
@@ -32,7 +105,7 @@ jobs:
 
   frontend:
     name: Svelte checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: apps/desktop
@@ -43,12 +116,31 @@ jobs:
           version: 12.15.0
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '24.17.0'
           cache: pnpm
           cache-dependency-path: apps/desktop/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm run check
       - run: pnpm run build
+      - name: Keyboard navigation, evidence UX and semantic theme regressions
+        run: node --test ../../tests/navigation-accessibility-sixteenth-wave.test.mjs ../../tests/evidence-ux-twelfth-wave.test.mjs ../../tests/palette-audit.test.mjs ../../tests/palette-contrast.mjs
+
+  docs-link-integrity:
+    name: Documentation files, images and relative links
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.17.0'
+      - name: Verify link scanner against valid and hostile fixtures
+        run: node --test tests/docs-links.test.mjs
+      - name: Verify full specification execution inventory and palette token contrast
+        run: |
+          node docs/mission/generate-complete-execution-plan.mjs --check
+          node --test tests/complete-execution-plan.test.mjs tests/palette-contrast.mjs
+      - name: Require all linked documentation and assets in the committed checkout
+        run: node tests/docs-links.mjs --require-tracked
 
   tool-library-and-catalog:
     name: Tool library and catalogue validation
@@ -56,35 +148,183 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # POSIX process-group tests on Linux/macOS and real Job Objects on Windows.
+        os: [ubuntu-24.04, windows-2025, macos-15]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          toolchain: 1.99.1
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/constellation-tools
       - uses: actions/setup-node@v4
         with:
-          node-version: '24'
-      - run: cargo test --manifest-path crates/constellation-tools/Cargo.toml --locked
+          node-version: '24.17.0'
+      - name: Format tool executor and platform regression tests
+        run: cargo fmt --manifest-path crates/constellation-tools/Cargo.toml --all --check
+      - name: Tool executor unit and integration tests
+        run: cargo test --manifest-path crates/constellation-tools/Cargo.toml --all-targets --locked
+      - name: Windows Job Object descendant and unrelated-control regressions
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo test --manifest-path crates/constellation-tools/Cargo.toml --test windows_job_descendants --locked
+          cargo test --manifest-path crates/constellation-tools/Cargo.toml --test windows_process_tree --locked
+      - name: Unix process-group descendant and unrelated-control regressions
+        if: runner.os != 'Windows'
+        run: cargo test --manifest-path crates/constellation-tools/Cargo.toml --test unix_process_groups --locked
       - run: cargo clippy --manifest-path crates/constellation-tools/Cargo.toml --all-targets --locked -- -D warnings
+      - run: node catalog/build-roles.mjs --check
       - run: node --test catalog/roles.test.mjs
-      - run: node skills-manifest/validate.mjs
-      - run: node --test skills-manifest/validate.test.mjs
+      # Local source qualification tests require a sibling Git checkout and
+      # managed user skills not provisioned on ephemeral GitHub runners. CI
+      # runs portable schema/negative checks; release preflight separately
+      # requires real installed-source and exercise-replay evidence.
+      - name: Portable skill manifest schema and adversarial identity tests
+        shell: bash
+        run: |
+          node skills-manifest/validate.mjs
+          node --test --test-name-pattern='^(portable schema validation|does not accept duplicate|distinct skill names|independently named vetted|one hashed exercise|CLI and skill state|source-reviewed skills require|installed-vetted status|even a passing exercise|pretended 200 count|missing source fingerprint|missing environment variable|rejects absent limitations)' skills-manifest/validate.test.mjs
+
+  offline-safety-modules:
+    name: Provider policy and encrypted recovery (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/constellation-provider-probe
+            crates/constellation-backup
+            crates/constellation-backup-cli
+      - name: Test provider policy and bounded local fixtures
+        run: cargo test --manifest-path crates/constellation-provider-probe/Cargo.toml --locked
+      - name: Test authenticated backup codec
+        run: cargo test --manifest-path crates/constellation-backup/Cargo.toml --locked
+      - name: Test live-WAL snapshot, recovery and CLI rejection cases
+        run: cargo test --manifest-path crates/constellation-backup-cli/Cargo.toml --locked
+      - name: Strict Clippy on all three crates
+        shell: bash
+        run: |
+          for crate in constellation-provider-probe constellation-backup constellation-backup-cli; do
+            cargo clippy --manifest-path "crates/$crate/Cargo.toml" --all-targets --locked -- -D warnings
+          done
+
+  provider-evidence-workflow-contracts:
+    name: Provider adapters, evidence, workflows, vault and sync protocol (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+          components: clippy, rustfmt
+      - name: Format, test and lint protocol, evidence, workflow, vault and sync crates
+        shell: bash
+        run: |
+          for crate in constellation-provider-adapters constellation-evidence constellation-workflows constellation-credential-vault constellation-sync; do
+            cargo fmt --manifest-path "crates/$crate/Cargo.toml" --all --check
+            cargo test --manifest-path "crates/$crate/Cargo.toml" --locked
+            cargo clippy --manifest-path "crates/$crate/Cargo.toml" --all-targets --locked -- -D warnings
+          done
+
+  agent-proposal-boundary:
+    name: Bounded offline agent proposal boundary (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/constellation-agent-loop
+      - name: Format model-to-tool approval boundary
+        run: cargo fmt --manifest-path crates/constellation-agent-loop/Cargo.toml --all --check
+      - name: Proposals, forged approvals, denied effects and cancellation
+        run: cargo test --manifest-path crates/constellation-agent-loop/Cargo.toml --locked --all-targets
+      - name: Strict agent proposal Clippy
+        run: cargo clippy --manifest-path crates/constellation-agent-loop/Cargo.toml --locked --all-targets -- -D warnings
+
+  project-archive-and-runner-protocol:
+    name: Offline project archive and runner protocol (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Source-level library tests, NOT installed apps, remote execution,
+        # or tested macOS/Linux distribution artifacts.
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            crates/constellation-project-backup
+            crates/constellation-runner-protocol
+      - name: Verify standalone crate formatting
+        shell: bash
+        run: |
+          cargo fmt --manifest-path crates/constellation-project-backup/Cargo.toml --all --check
+          cargo fmt --manifest-path crates/constellation-runner-protocol/Cargo.toml --all --check
+      - name: Project archive unit tests (no desktop profile)
+        run: cargo test --manifest-path crates/constellation-project-backup/Cargo.toml --lib --locked
+      - name: Project archive live-WAL, authenticated restore and path rejection fixtures
+        # Do not execute diagnose_live_profile_temporary.rs: an opt-in local
+        # diagnostic can access a caller-selected desktop profile.
+        run: cargo test --manifest-path crates/constellation-project-backup/Cargo.toml --test project_archive --locked
+      - name: Authenticated offline runner pairing and replay protocol tests
+        run: cargo test --manifest-path crates/constellation-runner-protocol/Cargo.toml --all-targets --locked
+      - name: Strict standalone crate Clippy
+        shell: bash
+        run: |
+          cargo clippy --manifest-path crates/constellation-project-backup/Cargo.toml --all-targets --locked -- -D warnings
+          cargo clippy --manifest-path crates/constellation-runner-protocol/Cargo.toml --all-targets --locked -- -D warnings
 
   desktop-windows-check:
     name: Windows native compile
-    runs-on: windows-latest
+    runs-on: windows-2025
     defaults:
       run:
         working-directory: apps/desktop/src-tauri
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri
       - name: Check Tauri application
         run: cargo check --locked
+      - name: Tauri unit and integration contracts
+        run: cargo test --lib --locked
+      - name: Tauri strict Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
 
-# This workflow validates source on hosted runners. It is NOT evidence of
-# installed application GUI testing, macOS/Android signed binaries, or release.
+# This workflow requests source validation; it is not evidence that hosted CI
+# has run or passed. It is NOT installed GUI QA, a live paired remote runner,
+# real cloud sync, signing, Android builds, macOS/Linux packages or a release.

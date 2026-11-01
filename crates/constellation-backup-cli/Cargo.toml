@@ -1,0 +1,19 @@
+[package]
+name = "constellation-backup-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Offline SQLite WAL-consistent encrypted backup/restore CLI for Constellation"
+license = "MIT"
+
+[dependencies]
+constellation-backup = { path = "../constellation-backup" }
+rusqlite = { version = "0.38.0", features = ["backup", "bundled", "serialize"] }
+rpassword = "7.5.4"
+tempfile = "3"
+thiserror = "2"
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3"
+sha2 = "0.10"

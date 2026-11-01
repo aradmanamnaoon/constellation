@@ -1,0 +1,464 @@
+name: Constellation acceptance coverage (unreleased)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# Every job is unprivileged; no branch write, issue, release or token upload.
+permissions:
+  contents: read
+
+concurrency:
+  group: constellation-acceptance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  CONSTELLATION_E2E_DATA_PATH: ''
+
+jobs:
+  source-manifest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.17.0'
+      - name: Enforce explicit committed source, lockfiles and forbidden tracked paths
+        run: node .github/workflows/source-gate.mjs
+      - name: Adversarial source gate and workflow policy tests
+        run: node --test tests/ci-source-gate-eleventh-wave.test.mjs
+
+  rust-format-lint:
+    needs: [source-manifest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Fixed Rust toolchain with formatting and lint components
+        shell: bash
+        run: rustup toolchain install 1.99.1 --profile minimal --component clippy,rustfmt
+      - name: Format and strictly lint all standalone Rust crates
+        shell: bash
+        run: |
+          set -euo pipefail
+          for manifest in crates/*/Cargo.toml apps/desktop/src-tauri/Cargo.toml; do
+            cargo +1.99.1 fmt --manifest-path "$manifest" --all --check
+            cargo +1.99.1 clippy --manifest-path "$manifest" --all-targets --locked -- -D warnings
+          done
+
+  unit-and-integration:
+    needs: [source-manifest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Pin Rust compiler
+        shell: bash
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Run isolated crate tests (exclude opt-in live-profile diagnostic)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for manifest in crates/*/Cargo.toml; do
+            if [[ "$manifest" == crates/constellation-project-backup/Cargo.toml ]]; then
+              cargo +1.99.1 test --manifest-path "$manifest" --locked --lib
+              cargo +1.99.1 test --manifest-path "$manifest" --locked --test project_archive
+            else
+              cargo +1.99.1 test --manifest-path "$manifest" --all-targets --locked
+            fi
+          done
+
+  frontend-check:
+    needs: [source-manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.17.0'
+      - name: Pin frontend package manager and frozen inputs
+        run: npm install --global pnpm@12.15.0
+      - name: Svelte typechecking and production frontend
+        working-directory: apps/desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run check
+          pnpm run build
+      - name: Basic static accessibility and contrast contracts
+        run: node --test tests/palette-audit.test.mjs
+
+  security-and-supply-chain:
+    needs: [source-manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.17.0'
+      - name: Enforce sources and Rust/frontend lockfiles
+        run: node .github/workflows/source-gate.mjs
+      - name: Require locked dependency graph from every existing crate
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.1 --profile minimal
+          for manifest in crates/*/Cargo.toml apps/desktop/src-tauri/Cargo.toml; do
+            cargo +1.99.1 metadata --manifest-path "$manifest" --locked --no-deps --format-version 1 >/dev/null
+          done
+      # Dedicated release preflight remains closed until advisories, license
+      # review, SBOM, secret/history scan and authenticated signing are proven.
+
+  schema-role-validation:
+    needs: [source-manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.17.0'
+      - run: node catalog/build-roles.mjs --check
+      - run: node --test catalog/roles.test.mjs
+
+  skills-200-audit:
+    needs: [source-manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.17.0'
+      - name: Portable skill policy/schema verification
+        run: node skills-manifest/validate.mjs
+      - name: Exercise negative cases without pretending hosted installs
+        run: |
+          node --test --test-name-pattern='^(portable schema validation|does not accept duplicate|distinct skill names|independently named vetted|one hashed exercise|CLI and skill state|source-reviewed skills require|installed-vetted status|even a passing exercise|pretended 200 count|missing source fingerprint|missing environment variable|rejects absent limitations)' skills-manifest/validate.test.mjs
+      # Real source-matched 200/200 installed and exercised qualifications are
+      # deliberately delegated to the read-only release readiness gate.
+
+  provider-contract-tests:
+    needs: [source-manifest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - shell: bash
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Offline fixture contracts and malformed provider envelopes
+        shell: bash
+        run: |
+          cargo +1.99.1 test --manifest-path crates/constellation-provider-adapters/Cargo.toml --locked
+          cargo +1.99.1 test --manifest-path crates/constellation-provider-probe/Cargo.toml --locked
+
+  mcp-acp-contract-tests:
+    needs: [source-manifest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - shell: bash
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Scoped process/Git tool and permission regressions
+        run: cargo +1.99.1 test --manifest-path crates/constellation-tools/Cargo.toml --all-targets --locked
+      # Independent live MCP/ACP product interoperability remains unverified.
+
+  sync-tests:
+    needs: [source-manifest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - shell: bash
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Offline concurrent encrypted revision/CAS/rollback and recovery tests
+        run: cargo +1.99.1 test --manifest-path crates/constellation-sync/Cargo.toml --locked
+      - name: Local encrypted backup/recovery codec tests
+        run: cargo +1.99.1 test --manifest-path crates/constellation-backup/Cargo.toml --locked
+      # Local mock is NOT an attestation of a real user's S3 conditional CAS.
+
+  runner-tests:
+    needs: [source-manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Linux service and pairing protocol tests (no remote daemon)
+        run: |
+          cargo +1.99.1 test --manifest-path crates/constellation-runner-protocol/Cargo.toml --locked
+          cargo +1.99.1 test --manifest-path crates/constellation-runner-service/Cargo.toml --locked
+      # Actual 24/7 service installation and remote execution require separate QA.
+
+  desktop-windows:
+    needs: [source-manifest, frontend-check]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-2025
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.17.0'
+      - shell: bash
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - run: npm install --global pnpm@12.15.0
+      - name: Reproducible NSIS build attempt
+        working-directory: apps/desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec tauri build --bundles nsis
+      - name: Inspect NSIS payload identity without installing on the runner
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = @(Get-ChildItem apps/desktop/src-tauri/target/release/bundle/nsis -Filter '*setup.exe' -File)
+          $binary = 'apps/desktop/src-tauri/target/release/constellation-desktop.exe'
+          if ($setup.Count -ne 1 -or -not (Test-Path $binary)) { throw 'Missing/ambiguous Windows artifact' }
+          $nsi = @(Get-ChildItem apps/desktop/src-tauri/target/release/nsis -Filter 'installer.nsi' -Recurse -File)
+          if ($nsi.Count -ne 1) { throw 'Missing/ambiguous installer source identity' }
+          ./tests/windows-bundle-identity.ps1 -InstallerPath $setup[0].FullName -DirectExePath $binary -NsisScriptPath $nsi[0].FullName
+          Get-FileHash $setup[0].FullName -Algorithm SHA256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-nsis-unsigned-unverified
+          path: apps/desktop/src-tauri/target/release/bundle/nsis/*setup.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  desktop-macos-arm:
+    needs: [source-manifest, frontend-check]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            arch: arm64
+          - os: macos-15-intel
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.17.0'
+      - name: Require actual native hosted architecture
+        shell: bash
+        run: test "$(uname -m)" = '${{ matrix.arch }}'
+      - shell: bash
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - run: npm install --global pnpm@12.15.0
+      - name: Native DMG build attempt (signing and notarization unverified)
+        working-directory: apps/desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec tauri build --bundles dmg
+      - name: Hash and inspect actual DMG, without claiming GUI/install QA
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          images=(apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg)
+          test "${#images[@]}" -eq 1
+          file "${images[0]}"
+          shasum -a 256 "${images[0]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-${{ matrix.arch }}-dmg-unnotarized-unverified
+          path: apps/desktop/src-tauri/target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+  desktop-linux:
+    needs: [source-manifest, frontend-check]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.17.0'
+      - run: rustup toolchain install 1.99.1 --profile minimal
+      - run: npm install --global pnpm@12.15.0
+      - name: Verify required WebKit/GTK development libraries are provisioned
+        shell: bash
+        run: |
+          set -euo pipefail
+          for pkg in gtk+-3.0 webkit2gtk-4.1; do pkg-config --exists "$pkg"; done
+      - name: Linux AppImage and deb build attempt
+        working-directory: apps/desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm exec tauri build --bundles deb,appimage
+      - name: Inspect packages and SHA-256 without installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          deb=(apps/desktop/src-tauri/target/release/bundle/deb/*.deb)
+          image=(apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage)
+          test "${#deb[@]}" -eq 1
+          test "${#image[@]}" -eq 1
+          dpkg-deb --info "${deb[0]}"
+          file "${image[0]}"
+          sha256sum "${deb[0]}" "${image[0]}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-deb-appimage-uninstalled-unverified
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/deb/*.deb
+            apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
+  android-build:
+    needs: [source-manifest, frontend-check]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Refuse unsigned/uninstalled Android release without verified Android project and keystore
+        shell: bash
+        run: |
+          echo 'Android ARM64 signed APK, verified keystore, emulator ADB install and resume smoke are not configured.'
+          echo 'No signing credentials were provided; refusing to mark the Android family passed.'
+          exit 1
+
+  docs-links:
+    needs: [source-manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.17.0'
+      - name: Documentation, visual asset and generated plan integrity
+        run: |
+          node --test tests/docs-links.test.mjs tests/complete-execution-plan.test.mjs
+          node docs/mission/generate-complete-execution-plan.mjs --check
+          node tests/docs-links.mjs --require-tracked
+
+  repo-size:
+    needs: [source-manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Bound entire reachable Git blob history, not just HEAD
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-list --objects --all |
+            cut -d ' ' -f1 |
+            git cat-file --batch-check='%(objecttype) %(objectsize)' |
+            awk '
+              $1 == "blob" { total += $2; if ($2 > largest) largest = $2; count++ }
+              END {
+                printf "Git history: %d blobs, %.0f bytes total, %.0f max\n", count, total, largest
+                if (count == 0 || total > 524288000 || largest > 52428800) exit 1
+              }
+            '
+
+  release-assets:
+    needs: [source-manifest, rust-format-lint, unit-and-integration,
+            frontend-check, security-and-supply-chain, schema-role-validation,
+            skills-200-audit, provider-contract-tests, mcp-acp-contract-tests,
+            sync-tests, runner-tests, desktop-windows, desktop-macos-arm,
+            desktop-linux, android-build, docs-links, repo-size]
+    if: always() && github.event_name == 'workflow_dispatch'
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require every dependency green, including installed/signed platform checks
+        shell: pwsh
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          $requirements = $env:NEEDS_JSON | ConvertFrom-Json
+          $failed = @($requirements.PSObject.Properties | Where-Object { $_.Value.result -ne 'success' })
+          if ($failed.Count) { throw 'Required acceptance job failed or skipped; no release permitted.' }
+      - name: Recheck full 188-row source and hosted/signature release preflight
+        shell: pwsh
+        run: |
+          ./tests/release-readiness.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Release preflight blocked; never publish or attest.' }
+      - name: Fail closed until independent installed GUI, Android signing, SBOM and provider evidence exists
+        shell: pwsh
+        run: |
+          Write-Error 'No verified full platform install/signing/SBOM/live-S3 evidence. Release remains blocked.'
+          exit 1
+
+# Workflow definitions and build artifacts are NOT hosted results, signed
+# installers, validated Android APK, installed GUI receipts or a publication.

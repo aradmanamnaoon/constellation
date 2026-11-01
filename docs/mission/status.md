@@ -1,86 +1,49 @@
-# Project Constellation — engineering status
+# Constellation — engineering status
 
-**Checkpoint:** 2026-10-30. **Classification:** experimental local-first
-vertical slice, **NOT the full requested mission**, NOT production secure,
-NOT yet publicly published. The spec remains the original attached
-`Codex_Master_Prompt_Local_Agent_Collaboration_Platform.md` (1,237 lines).
+**Checkpoint:** 2026-10-30. **Classification:** experimental local-first desktop application; incomplete against the original 1,237-line master specification and [188-row acceptance ledger](../quality/acceptance-ledger.md). The authoritative, current [23-workstream task board](active-task-plan.md) tracks what has and has not been verified. This checkout is not a production release.
 
-**Source build identity:** local implementation commit
-`b229c5f1461d4455f1a1d41b6ff46e870e89ddd1`. Its Windows NSIS artifact
-was built successfully and installed after the 200-role catalogue expansion.
-See [the exact installer hash, installed executable hash, NotSigned status and
-native UIA search evidence](../qa/windows-native-smoke.md). This is local
-reproducibility evidence, not a public GitHub release.
+## Working tree and release identity
 
-**Subsequent hardened task revision:** source commit
-`c878520e4921dc08a0a444c501b6e01d092aaae2` adds input bounds and
-task-cancellation handling. Its own x64 NSIS installer was built offline,
-installed and smoke-tested. The latest installer is the 2,990,183-byte file
-with SHA-256 `3eef254bd03fa754e0f9a4d778744eab8f4255fe3a7c26da42b33596c4e66f19`.
-See the dated QA record for the corresponding installed executable identity.
+The connected Windows checkout is at Git HEAD `db7d78a` with extensive intentional, uncommitted source, crate, test and documentation changes. `git remote -v` returned no remote. Earlier installer checksums in [the historical Windows smoke record](../qa/windows-native-smoke.md) refer to distinct binaries at older source states; they are **not** current release artifacts.
 
-## Verified work
+Windows native consent has two completed source-pinned candidates. The older `54EBD9F1...` direct EXE and `77797EDC...` unsigned NSIS demonstrated native No/Yes/read/create/no-clobber before read-content hash binding. The subsequent **SHA-bound** direct Windows x64 EXE `1A1C2E60A3E2632FAAFBFB79204670187BFB78FB1A90239074C586F44F63F607` and unsigned NSIS `3219D334F8D4B972BD3FBCE13824AC105ECFB2E298B8897364B13446B249C9A2` passed a five-dialog private-desktop matrix including same-length read-content mutation rejection and 14 correlated journal envelopes. The 11-file frozen source manifest was `FCBCC4A82CE858BDB035BF687EDE6358A8668F822580D57EFD7BBD9AC98A50E1`. **Another concurrent actor changed the executor and other source files after this successful build and GUI run. The frozen artifact remains independently verified, but the newer live worktree is not covered by that result.** See [Windows SHA-bound read QA](../qa/windows-sha-bound-read-private-2026-10-30.md) and [native V2 GUI QA](../qa/windows-final-private-desktop-2026-10-30.md). Neither direct-EXE result proves an installed NSIS lifecycle, signed Git tag or public release.
 
-- Original custom Tauri2/Svelte5 desktop app with Rust domain and native IPC.
-- Rust SQLite state/event persistence, task lifecycle, idempotent operations,
-  exact scope default-deny permission policy as a library, session-only keys.
-- OpenAI-compatible provider contract; no hidden user-account or model
-  download. Remote egress only after explicit provider selection and Ask.
-- Two-agent group-chat path tested by Windows GUI automation with a labelled
-  localhost **mock** provider: each selected agent replied once to the same
-  new user prompt, and a repeated request skipped stored replies.
-- Task creation, selected-model text execution and persisted result tested
-  through the real installed Windows GUI using a labelled loopback fixture.
-  Atomic task completion, cancellation and interrupted-request recovery are
-  protected by Rust store tests. No OS coding-tool execution is wired.
-- 200 prompt-only role specialties (42 foundational and 158 expanded), with
-  substantive output expectations and deterministic validation tests;
-  prompt guidance embedded in native request system instructions; NO role tool
-  grants or autonomous coding execution.
-- Read-only Markdown room export: unit tests and Tauri IPC code. Direct GUI
-  clipboard behavior remains separately testable.
-- Separate experimental filesystem/command/Git effect library with permission
-  scopes, one-shot operation approvals and receipts, *not exposed to agents*.
-  Its security tests are narrower than a true OS sandbox. Approval and receipt
-  state are in memory only; path-to-handle TOCTOU, child process trees and
-  network egress containment remain unresolved.
+## Implemented and exercised slices
 
-## Reproducible test commands
+- Local-first Tauri 2 / Svelte 5 interface with Rust-owned SQLite room, message, role, task and provider state. The core implements durable task transitions, idempotent operations, result transactions, cancellation and interrupted-request recovery.
+- Explicit model selection and six provider protocol families; labelled localhost fixtures exercise bounded HTTP and multi-agent text replies. No externally billed model run or full streaming/tool-calling capability test is established.
+- **Exactly 200 prompt-only role templates** (42 originals plus 158 distinct expansions), verified by catalogue tests. These descriptions do not grant tools or prove real model capability.
+- Native text-task and workflow DAG operations, saved plans, cancellation, Markdown reports and source-grounded Evidence search. Multiple isolated Windows GUI tests cover real local UI flows. A new standalone offline Rust `constellation-agent-loop` library tests strict model proposal parsing, permission-free previews and trusted dispatch handoff, but it is not connected to live models or the native UI and is not an autonomous coding loop.
+- The Rust tool executor implements exact-scope approvals, write-once operations, authenticated HMAC journal, Windows Job Object descendant cleanup and Unix process-group test paths. The desktop currently exposes **human-triggered**, pending-task-bound read/create actions inside its private artifacts directory, with independent Win32 consent and one-use proof. SHA-bound read approvals reject changed content, including different contents of exactly the same length; the frozen SHA-bound Windows candidate **passed five actual native dialogs and 14 correlated journal envelopes**. Subsequent unrelated executor edits require a separately rebuilt candidate and fresh tests before closing current-source acceptance. It does not expose Process/Git tool dispatch to models or supply a hardened kernel sandbox.
+- Two-database encrypted project archive and isolated recovery, standalone encrypted backup codec and SQLite online backup tests, plus a real private-desktop Windows GUI recovery check. Cross-database snapshots are not globally atomic, and portability/attachment recovery are incomplete.
+- Opt-in encrypted S3-compatible sync protocol with strict conditional writes and adverse offline fixtures, along with an authenticated remote-runner pairing/checkpoint **protocol**. No live provider CAS, two-device restore, remote daemon, scheduling or automatic laptop-off execution has been demonstrated.
+- A source-/license-pinned development audit inventory. The strict verifier currently recognizes **19 of 200** individually installed/exercised skills; 181 are unqualified, and no runtime MCP server is verified. Do not equate observed user-level files with vetted integrations.
+- Windows unsigned NSIS local build and real private GUI tests. A frozen SHA-bound Ubuntu 26.04 WSL2 Linux x86_64 ELF, `.deb` and AppImage were independently packaged from **180 checked source inputs**. Rootless Debian unpack and all three private Xvfb modes (.deb, AppImage extract, AppImage FUSE) passed; pixel comparison showed identical rendered workspaces. The AppImage's pinned cached runtime avoided a new download, but its publisher provenance, signing and host GTK/WebKit compatibility outside Ubuntu remain unverified. See [the new source-pinned Linux record](../qa/linux-sha-bound-read-build-2026-10-30.md); the subsequent live tool-executor changes require revalidation.
+
+## Current repeatable checks
 
 ```sh
+# From repository root:
+node catalog/build-roles.mjs --check
 node --test catalog/roles.test.mjs
 node skills-manifest/validate.mjs --verify-local
-node --test skills-manifest/validate.test.mjs
+node --test skills-manifest/reviewed-exercise.test.mjs skills-manifest/validate.test.mjs
+
+# Rust crate checks (use C: Cargo target on the Windows machine if D: is full):
 cargo test --manifest-path crates/constellation-core/Cargo.toml --offline
-cargo clippy --manifest-path crates/constellation-core/Cargo.toml --all-targets --offline -- -D warnings
 cargo test --manifest-path crates/constellation-tools/Cargo.toml --offline
-cargo clippy --manifest-path crates/constellation-tools/Cargo.toml --all-targets --offline -- -D warnings
-cd apps/desktop
+cargo test --manifest-path crates/constellation-agent-loop/Cargo.toml --offline --locked --all-targets
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --lib
+
+# From apps/desktop:
 pnpm run check
 pnpm run build
-cargo test --manifest-path src-tauri/Cargo.toml --offline --lib
-cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --offline -- -D warnings
 ```
 
-Windows GUI evidence: [`docs/qa/windows-native-smoke.md`](../qa/windows-native-smoke.md).
-No CI run, real-model chat, macOS, Linux or Android installed app test may be
-inferred from the above commands.
+On 2026-10-30, the catalogue and **4/4** role tests passed; latest strict skills verifier returned **19/200**, and the expanded local audit/forgery suite passed **52/52** after re-exercising stale source-bound receipts. Frontend `pnpm run check` reported zero errors and zero warnings and static build exited 0. The new offline agent-proposal library passed **8/8** integration tests and strict Clippy. The final Ubuntu 26.04 WSL2 source-specific verification passed **47/47** desktop library tests and **42** tool tests (four intentionally ignored fixture entry points), including real Unix process-grandchild regressions. Non-Windows native consent fail-close was source-inspected only, without a real Linux GUI approval attempt. A concurrent change to the executor and other source files means prior frozen binary snapshots **must be revalidated** against a final fixed source revision before publishing.
 
-## Observed environment constraint
+## Gates preventing a complete release
 
-Windows D: drive had insufficient free space for incremental Rust debug
-outputs. The native target debug directory was cleaned with **scoped**
-`cargo clean --profile dev` in Constellation, preserving source/release
-bundles, then debug output was relocated to the C: temporary directory with
-`CARGO_TARGET_DIR` and `CARGO_INCREMENTAL=0`. See root README for commands.
+Full tool-using agent iteration (including approved fail→fix→test), OS-level handle/path race containment, real-provider privacy and billing validation, streaming/failover, **181 additional exercised integrations**, live secure sync and paired runner, large-history/RTL/IME/accessibility QA, macOS Intel/ARM and Android native packaging, source-fresh Windows/Linux installer acceptance, cross-distribution Linux AppImage portability, independent threat review, complete SBOM/license triage, immutable release checksums, hosted green CI, signing and public distribution remain open.
 
-## Major work remaining
-
-Permissioned OS-tool task execution, production provider tests and costs, prompts
-and MCP tool policy/role permission boundaries, file attachment/citation
-flow, OS sandbox, encrypted backup/sync, runner, Android, cross-platform
-packages and signing, security audit, 200 verified roles, 200 verified
-development integrations, hosted CI evidence and actual public release.
-
-The source checkout must **not** be described as a completed release. This
-checkpoint is useful for implementation recovery, not user acceptance.
+The original [acceptance inventory](../quality/acceptance-ledger.md) deliberately retains unverified entries until each has test platform, binary identity, evidence and reviewer details. No Git commit, remote push, tag or public release has been performed for this latest worktree.

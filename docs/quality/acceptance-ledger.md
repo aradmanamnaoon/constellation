@@ -12,6 +12,46 @@
 - Initial acceptance gates include exactly **200 substantive role templates** and **200 distinct vetted skills/MCP entries**, requiring a machine-readable manifest and real exercise/limitations; counting scaffolds is not proof.
 - Refer to [provisional framework ADR](../architecture-decision.md) and [initial threat model](../security/initial-threat-model.md). The specification also calls for `docs/qa/acceptance-ledger.md`; a later integration task should either move this ledger there or make that path a discoverable link, without creating inconsistent duplicate status records.
 
+**Additional 2026-10-31 source-only observations (not upgrades to any
+cross-platform or installed-GUI acceptance row):** Prime independently
+verified Core 30/30 offline tests for exact SQLite v1 plus budget/Evidence
+optional extensions; native Rust 81/81 tests including source-only saved
+Evidence, encrypted archive recovery, rights-gated PDF/DOCX preview and
+five host-only HMAC checkpoint negative/race tests; Evidence 28/28 offline
+tests with actual restricted PDF/DOCX fixtures; 24 protocol and 8 runner
+service tests, and 14 palette/plan Node tests. Native/Svelte check and build,
+strict native/Core/Evidence Clippy and fmt gates pass at those worktree
+checkpoints. Source paths, commands and limitations in
+[budget QA](../qa/core-desktop-budget-compatibility-2026-10-31.md),
+[saved Evidence](../qa/native-saved-evidence-2026-10-31.md),
+[PDF/DOCX preview](../qa/native-document-import-preview-2026-10-31.md),
+[host checkpoint](../qa/native-host-checkpoint-vault-2026-10-31.md),
+[runner](../qa/runner-sixth-wave-2026-10-31.md) and
+[CSS](../qa/css-accessibility-2026-10-31.md).
+**All 188 platform rows below remain UNVERIFIED** until direct, source-pinned
+installed application, platform and hosted observations meet each row's
+required modality. No Git remote, push or public release was verified.
+
+**Subsequent ninth/tenth-wave source evidence (same uncommitted Windows
+working tree):** Native Tauri Rust tests **89/89 PASS** including real Core
+pending-task revocation, one-time Windows Credential Manager checkpoint key,
+durable concurrent independent workflow completion, paired encrypted archive
+reference checks, and explicit hashed Evidence source deletion/export.
+Tool crate independent offline Windows tests and strict Clippy **PASS** with
+approved cwd OS identity pinning; Sync crate **21/21 PASS**, strict Clippy/fmt,
+with bounded trusted-checkpoint recovery and session-local revocation;
+Workflow **30/30 PASS** and Project Backup **14/14 PASS**. Svelte typecheck
+zero errors/warnings, production build PASS; palette/plan **14/14 PASS**.
+The latest final native strict Clippy initially found an unused borrow in the
+new Evidence export and was corrected; a follow-up lint/fmt run is required
+before claiming a clean complete source revision. All observations are limited
+to exact test scopes, not real deployed multi-agent OS containment, physical
+two-device cloud CAS or accessible installed GUI. See
+[Prime native integration](../qa/ninth-prime-native-integration-2026-10-31.md),
+[Tools](../qa/tool-containment-tenth-wave-2026-10-31.md), and
+[Sync](../qa/sync-conflict-tenth-wave-2026-10-31.md). Platform rows remain
+UNVERIFIED; release remains blocked.
+
 ## Core functionality, security, performance, CI and release
 
 | requirement_id | requirement | platform | build_sha | environment | test_type | automated/manual | observed_result | screenshot_or_log | verified_by | timestamp | blocker |

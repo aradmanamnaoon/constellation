@@ -121,6 +121,7 @@ mod tests {
                 id: agent_id,
                 role: "Reviewer".into(),
                 name: "Agent *One*".into(),
+                provider_id: None,
                 created_at_ms: 3,
             }],
             messages: vec![

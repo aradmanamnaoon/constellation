@@ -198,51 +198,86 @@
     {
       "id": "skill:completion-claims-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Check completion claims against observed code, tests and release evidence",
       "source": {
-        "path": "../vibe-coding-skills/skills/agent-reliability/completion-claims-auditor/SKILL.md",
-        "provenance": "Sibling vibe-coding-skills git d532b2b52725cbd92b2815fbc98e1e516503137b",
-        "sha256": "684b4cd4cba9d319c46d5378ab5ece5514a3cc0255d3b734cf48b3b07185e7cf"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/completion-claims-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "684b4cd4cba9d319c46d5378ab5ece5514a3cc0255d3b734cf48b3b07185e7cf",
+        "upstream_blob_sha256": "f2a049c10b7f96986e0abcae71560d24e31e3b3efaf585fb6ca6354780b2c97f",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/agent-reliability/completion-claims-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md; Get-FileHash -Algorithm SHA256; inspected trigger/safety/validation headings",
-        "output": "Source file and required sections observed",
-        "version": null
+        "command": "node skills-manifest/exercise-local.mjs completion-claims-auditor --write-receipt",
+        "output": "Observed 7/7 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source available only; not installed in Constellation",
-        "No execution against a real Constellation task"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Audit checks evidence metadata and published milestone wording, not actual installed GUI, CI or remote release status",
+        "The acceptance ledger may still contain UNVERIFIED requirements; a passing audit does not fulfill those requirements",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs completion-claims-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Audit Constellation requirement evidence rows and delivery completion claims; reject unsupported PASS and duplicate IDs",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/completion-claims-auditor.json",
+        "receipt_sha256": "3f67e976fb41dfdc17eb8d2351c0d59039c8826f2ac63c1506725e7b620b8880",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:existing-work-preservation",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Establish a known-good baseline and protect unrelated working behavior before AI edits an established project. Use before risky fixes, refactors, or broad feature work.",
       "source": {
-        "path": "../vibe-coding-skills/skills/agent-reliability/existing-work-preservation/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "559bed9c65c27a8841a5e676d221514ea2dcaee96e6864f911c27c7197df3f71"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/existing-work-preservation/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "559bed9c65c27a8841a5e676d221514ea2dcaee96e6864f911c27c7197df3f71",
+        "upstream_blob_sha256": "72c22421376d1e62bfb8c3b5c0f73bb9b182ad14968d67cb955d9f03ec63b527",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/agent-reliability/existing-work-preservation/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2724 bytes on 2026-10-30"
+        "command": "node skills-manifest/seventeenth-exercise.mjs existing-work-preservation --write-receipt",
+        "output": "6 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Policy and deterministic conflict exercise; did not modify or restore the actual working tree",
+        "Git baseline change history and behavior regression verification require each real edit task",
+        "Development-only skill; no real MCP runtime or app tool authorization was installed",
+        "Upstream publisher identity not independently authenticated; pinned local Git source and MIT license verified"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/seventeenth-exercise.mjs existing-work-preservation --write-receipt",
+        "outcome": "passed",
+        "result": "Verify actual Constellation preservation policy, worker ownership, and a bounded dirty-tree conflict decision",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/seventeenth/existing-work-preservation.json",
+        "receipt_sha256": "03315b6b9fd984fff043b726d6d051d5ba1066bb16b251aa300293195bdd4e24",
+        "runner_path": "skills-manifest/seventeenth-exercise.mjs",
+        "runner_sha256": "56469aed31b8e0e8cc29fdc1342fa629e7090dddc94dc7a5d236d0c3eb7f5da1"
+      }
     },
     {
       "id": "skill:mcp-reliability-auditor",
@@ -272,315 +307,553 @@
     {
       "id": "skill:multi-agent-integration-reviewer",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Review parallel coding agent changes and integration conflicts",
       "source": {
-        "path": "../vibe-coding-skills/skills/agent-reliability/multi-agent-integration-reviewer/SKILL.md",
-        "provenance": "Sibling vibe-coding-skills git d532b2b52725cbd92b2815fbc98e1e516503137b",
-        "sha256": "40492f480e70a15e642a5cf2bbf63c5524fc7f9418c8790a04e5a5594cad1594"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/multi-agent-integration-reviewer/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "40492f480e70a15e642a5cf2bbf63c5524fc7f9418c8790a04e5a5594cad1594",
+        "upstream_blob_sha256": "35da3668a8981b1f3d0f587313f34230ee5c7e9e7809817dc81ee95cd488a103",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/agent-reliability/multi-agent-integration-reviewer/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md; Get-FileHash -Algorithm SHA256; inspected trigger/safety/validation headings",
-        "output": "Source file and required sections observed",
-        "version": null
+        "command": "node skills-manifest/eighteenth-exercise.mjs multi-agent-integration-reviewer --write-receipt",
+        "output": "7 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Read-only source inventory",
-        "Not exercised on simultaneous worker merges"
-      ]
+        "Performed read-only module-contract and ownership exercises, not actual branch integration or merging",
+        "The native/Core combined build and runtime remain separately validated by project CI",
+        "No runtime MCP integration is provided or claimed by this local development skill",
+        "Publisher GitHub identity not authenticated beyond observed clean pinned local Git repository"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/eighteenth-exercise.mjs multi-agent-integration-reviewer --write-receipt",
+        "outcome": "passed",
+        "result": "Audit the real native/Core tool-permission integration contract and detect overlapping ownership plus semantic signature drift",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/eighteenth/multi-agent-integration-reviewer.json",
+        "receipt_sha256": "f572b9851ccee05722a14bfa5a97d8d87a93d2fb5f6f7489fb0a06ec0ae65b4d",
+        "runner_path": "skills-manifest/eighteenth-exercise.mjs",
+        "runner_sha256": "386d777390a28481786b1a0962986c849bbc7cdada8e309b2d49eea3e1c2faa8"
+      }
     },
     {
       "id": "skill:project-context-recovery",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Reconstruct an interrupted project's goals, current state, completed work, and next safe actions from repository evidence. Use after context loss, compaction, session changes, or handoff.",
       "source": {
-        "path": "../vibe-coding-skills/skills/agent-reliability/project-context-recovery/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "dc17a7009d9fd58ad5a4e315b3595c9ce674ef041670dea66dd5240b5d363b14"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/project-context-recovery/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "dc17a7009d9fd58ad5a4e315b3595c9ce674ef041670dea66dd5240b5d363b14",
+        "upstream_blob_sha256": "2538034ebe13be9b35c1fe162f0db59074c05d3150f5da903db79c6946051877",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/agent-reliability/project-context-recovery/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2762 bytes on 2026-10-30"
+        "command": "node skills-manifest/nineteenth-exercise.mjs project-context-recovery --write-receipt",
+        "output": "8 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Current source, ledger and Git state are inspected without retrieving the full external user master specification",
+        "No claim of implemented acceptance, native GUI testing, hosted release, or code fix",
+        "Git worktree can change concurrently; this is a source-bound local observation only",
+        "This is an installed local development skill, never an MCP runtime",
+        "Git origin is observed locally; publisher account identity not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/nineteenth-exercise.mjs project-context-recovery --write-receipt",
+        "outcome": "passed",
+        "result": "Recover current Constellation state using authoritative instructions, an actual unresolved acceptance row and read-only Git history/status",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/nineteenth/project-context-recovery.json",
+        "receipt_sha256": "d2e16fb42b8c95d5717879a9a96e9e077c1b450b1364773851ff497062704c1c",
+        "runner_path": "skills-manifest/nineteenth-exercise.mjs",
+        "runner_sha256": "57831fae4883fd5172bd0f4bef2904a2b0c6d56cc308b9f2ea70007b2443e99c"
+      }
     },
     {
       "id": "skill:requirement-traceability-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Map a large prompt, specification, or issue into stable requirements and verify each against implementation and evidence. Use for complex multi-requirement work or final audits.",
       "source": {
-        "path": "../vibe-coding-skills/skills/agent-reliability/requirement-traceability-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "6c7c91d40ec8718b2ad9589326f5e0ddd26c2fd44b8c9202d0b5791990eb7d0c"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/requirement-traceability-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; source hash verified; publisher identity not independently authenticated",
+        "sha256": "6c7c91d40ec8718b2ad9589326f5e0ddd26c2fd44b8c9202d0b5791990eb7d0c",
+        "upstream_blob_sha256": "c2447bb512de624896d3738ff6eac4b4878a5ac5161ee86f078e25b68b64d62f",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/agent-reliability/requirement-traceability-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2957 bytes on 2026-10-30"
+        "command": "node skills-manifest/reviewed-exercise.mjs requirement-traceability-auditor --write-receipt",
+        "output": "Observed 8 independently replayable offline checks against actual Constellation source and controlled negative fixtures. Source/license/managed install matched pinned local Git. No runtime MCP or publisher authentication."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Local development audit with bounded source/SQL fixtures; neither full feature validation nor runtime app integration",
+        "Audits acceptance ledger metadata completeness, not semantic coverage of original 1,237-line mission",
+        "Actual runtime/build/test observations require their own independent evidence and cannot be inferred from the matrix",
+        "A passing receipt alone never establishes installation, permission, or runtime MCP qualification",
+        "Publisher identity was not independently authenticated; MIT license applies to observed pinned repository content"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/reviewed-exercise.mjs requirement-traceability-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Build platform-scoped requirement coverage matrix from actual acceptance ledger; detect missing columns, duplicate keys and unsupported PASS with adversarial fixtures",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/reviewed/requirement-traceability-auditor.json",
+        "receipt_sha256": "9eb41cb1589fb21802d606633fe3b3d80f4491ec3be807e924c2d509cdd189ae",
+        "runner_path": "skills-manifest/reviewed-exercise.mjs",
+        "runner_sha256": "f0dd1b4776cc5c009fe4ae7a72e7ccdcb7ee8ffaab83af5de17a8849d0089a88"
+      }
     },
     {
       "id": "skill:scope-drift-guard",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Detect edits outside the requested change surface and require a dependency rationale for every additional file. Use during or after autonomous code changes.",
       "source": {
-        "path": "../vibe-coding-skills/skills/agent-reliability/scope-drift-guard/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "711755a3302dfc8963cd85ae7050befe325edd5b5e98f3ff2f803eddd0be064c"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/scope-drift-guard/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; source hash verified; publisher identity not independently authenticated",
+        "sha256": "711755a3302dfc8963cd85ae7050befe325edd5b5e98f3ff2f803eddd0be064c",
+        "upstream_blob_sha256": "193aedec1a438eaa92a78410a8232eef262d38e387321c481afb30e1a9507750",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/agent-reliability/scope-drift-guard/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2845 bytes on 2026-10-30"
+        "command": "node skills-manifest/reviewed-exercise.mjs scope-drift-guard --write-receipt",
+        "output": "Observed 5 independently replayable offline checks against actual Constellation source and controlled negative fixtures. Source/license/managed install matched pinned local Git. No runtime MCP or publisher authentication."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Local development audit with bounded source/SQL fixtures; neither full feature validation nor runtime app integration",
+        "Uses synthetic scope paths and repository instructions; does not inspect/revert actual concurrent users' changes",
+        "No source edits, git resets or process executions are undertaken by the exercise",
+        "A passing receipt alone never establishes installation, permission, or runtime MCP qualification",
+        "Publisher identity was not independently authenticated; MIT license applies to observed pinned repository content"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/reviewed-exercise.mjs scope-drift-guard --write-receipt",
+        "outcome": "passed",
+        "result": "Apply real repository ownership instructions to a scoped, synthetic changed-file set; reject adjacent workspace and traversal edits",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/reviewed/scope-drift-guard.json",
+        "receipt_sha256": "5632ee479f018e5923798f62f7a1422ddd453481aa0081128cb48b486a291edd",
+        "runner_path": "skills-manifest/reviewed-exercise.mjs",
+        "runner_sha256": "f0dd1b4776cc5c009fe4ae7a72e7ccdcb7ee8ffaab83af5de17a8849d0089a88"
+      }
     },
     {
       "id": "skill:architecture-complexity-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Find modules whose coupling, size, responsibility mix, or change fan-out makes AI-assisted maintenance fragile. Use before major refactors or when files keep growing.",
       "source": {
-        "path": "../vibe-coding-skills/skills/architecture/architecture-complexity-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "7d39d492a0a3db41e55b26c035dc09702f525813d72d6ed0926b9cf1e47fcafb"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/architecture-complexity-auditor/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "7d39d492a0a3db41e55b26c035dc09702f525813d72d6ed0926b9cf1e47fcafb",
+        "upstream_blob_sha256": "cc0915f008b1ff0b42b682aedd89a85d788c02c5dda11fd241e3e039cd3dc3a7",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/architecture/architecture-complexity-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2866 bytes on 2026-10-30"
+        "command": "node skills-manifest/seventeenth-exercise.mjs architecture-complexity-auditor --write-receipt",
+        "output": "7 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Static fan-out and responsibility signals only; no claim that a refactor was performed",
+        "Dynamic dispatch, hidden dependencies, and actual change-history coupling are outside this bounded scan",
+        "Development-only skill; no real MCP runtime or app tool authorization was installed",
+        "Upstream publisher identity not independently authenticated; pinned local Git source and MIT license verified"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/seventeenth-exercise.mjs architecture-complexity-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Measure real Rust core store responsibilities and dependency evidence without asserting file length alone mandates refactoring",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/seventeenth/architecture-complexity-auditor.json",
+        "receipt_sha256": "070f59f09ddfd948e211c342fe28cccc03cacdbaacdfd07350c34b9c4e560e79",
+        "runner_path": "skills-manifest/seventeenth-exercise.mjs",
+        "runner_sha256": "56469aed31b8e0e8cc29fdc1342fa629e7090dddc94dc7a5d236d0c3eb7f5da1"
+      }
     },
     {
       "id": "skill:dependency-cycle-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Detect direct and indirect module dependency cycles and choose the smallest safe boundary to break them. Use for circular imports, layering failures, or tangled module graphs.",
       "source": {
-        "path": "../vibe-coding-skills/skills/architecture/dependency-cycle-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "bd411f00e7b8c1414010757f441e866d399a65dce2409b82a06ec670b139a2fe"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/dependency-cycle-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "bd411f00e7b8c1414010757f441e866d399a65dce2409b82a06ec670b139a2fe",
+        "upstream_blob_sha256": "e3f03f15b8963edcad0c500af3a43b89d5e0d949c92bbffff26c667f7f3cfb55",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/architecture/dependency-cycle-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 3014 bytes on 2026-10-30"
+        "command": "node skills-manifest/exercise-local.mjs dependency-cycle-auditor --write-receipt",
+        "output": "Observed 7/7 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Only statically declared Cargo path dependencies; dynamically loaded runtime modules or JavaScript imports are outside scope",
+        "No cycle is currently present, so no source patch or rebuild was needed",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs dependency-cycle-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Audit all Constellation Rust path-dependency edges for actual cycles and enforce core-to-desktop layering",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/dependency-cycle-auditor.json",
+        "receipt_sha256": "51d4f6069ec7d952ef8f43f1922bd5e388d4d7338c0ddd33473e3cb83bac9516",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:data-consistency-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Detect lost updates, incomplete transactions and retry duplication",
       "source": {
-        "path": "../vibe-coding-skills/skills/backend/data-consistency-auditor/SKILL.md",
-        "provenance": "Sibling vibe-coding-skills git d532b2b52725cbd92b2815fbc98e1e516503137b",
-        "sha256": "db309550fc78fef39345563c1beb0435057b9419d226e71569da8a5b69cbc3e0"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/data-consistency-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "db309550fc78fef39345563c1beb0435057b9419d226e71569da8a5b69cbc3e0",
+        "upstream_blob_sha256": "c7e352aa07617cbe4a5f7b50aeca9515ba994c48264b8bece32dced167cb4a31",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/backend/data-consistency-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md; Get-FileHash -Algorithm SHA256; inspected trigger/safety/validation headings",
-        "output": "Source file and required sections observed",
-        "version": null
+        "command": "node skills-manifest/exercise-local.mjs data-consistency-auditor --write-receipt",
+        "output": "Observed 5/5 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source reviewed; no installation or runtime task exercise"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Node SQLite exercises extracted production SQL on isolated in-memory tables, not Rust mutex scheduling or multi-process concurrency",
+        "Covers two deterministic interleavings and one transaction rollback; full WAL crash recovery and remote synchronization are unverified",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs data-consistency-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Execute real Constellation SQLite schema and workflow update SQL for transaction rollback, duplicate operation replay and stale revision interleavings",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/data-consistency-auditor.json",
+        "receipt_sha256": "678ad45d453ce9273ef7573704956ecca7eac08c2bae6fea91f5ee6336d2f295",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:database-schema-reviewer",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Review relational or document schemas for keys, relationships, constraints, nullability, indexes, and access-pattern fit. Use before schema creation or migration.",
       "source": {
-        "path": "../vibe-coding-skills/skills/backend/database-schema-reviewer/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "c0b539a7a54e31a3b9ffcc5f0703ebd390b15a9e851f0f250edd5ed8b61a110a"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/database-schema-reviewer/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "c0b539a7a54e31a3b9ffcc5f0703ebd390b15a9e851f0f250edd5ed8b61a110a",
+        "upstream_blob_sha256": "8081072e5049b00a78437a4914eb9bb80afb59f19239f7750c5de81da563aca6",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/backend/database-schema-reviewer/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2768 bytes on 2026-10-30"
+        "command": "node skills-manifest/exercise-local.mjs database-schema-reviewer --write-receipt",
+        "output": "Observed 16/16 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Node SQLite engine exercises schema SQL only; full rusqlite migrations, transaction concurrency, WAL and end-to-end persistence remain separate tests",
+        "Focused constraints and one index tested, not complete query-plan optimization or all domain invariants",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs database-schema-reviewer --write-receipt",
+        "outcome": "passed",
+        "result": "Execute Constellation core and workflow Rust-authored SQLite schemas in memory and exercise relational constraints with valid/invalid records",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/database-schema-reviewer.json",
+        "receipt_sha256": "4545c8924e94faa0f76de32d7cfb0a29d50caf98eb0d6155932f7e048dbceef9",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:migration-safety-reviewer",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Audit database migrations for destructive changes, locking, backfill, rollback, and mixed-version rollout safety. Use before applying schema/data migrations.",
       "source": {
-        "path": "../vibe-coding-skills/skills/backend/migration-safety-reviewer/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "2e6b640bd6cced46c0bb8163672c5f42c6cbcf384ff8be8d1be4df71423494ab"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/migration-safety-reviewer/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; source hash verified; publisher identity not independently authenticated",
+        "sha256": "2e6b640bd6cced46c0bb8163672c5f42c6cbcf384ff8be8d1be4df71423494ab",
+        "upstream_blob_sha256": "8e10260f5bf2dc80280a0868a5102a983ff0ef21ddb6ecc6cd6c085174b1119f",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/backend/migration-safety-reviewer/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2823 bytes on 2026-10-30"
+        "command": "node skills-manifest/reviewed-exercise.mjs migration-safety-reviewer --write-receipt",
+        "output": "Observed 7 independently replayable offline checks against actual Constellation source and controlled negative fixtures. Source/license/managed install matched pinned local Git. No runtime MCP or publisher authentication."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Local development audit with bounded source/SQL fixtures; neither full feature validation nor runtime app integration",
+        "In-memory SQLite DDL and SQL reviewed; production file locking, backfills, large data, and concurrent mixed-version deployment untested",
+        "No upgrade from prior shipped schema or production rollback is claimed",
+        "A passing receipt alone never establishes installation, permission, or runtime MCP qualification",
+        "Publisher identity was not independently authenticated; MIT license applies to observed pinned repository content"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/reviewed-exercise.mjs migration-safety-reviewer --write-receipt",
+        "outcome": "passed",
+        "result": "Classify production workflow SQL and exercise a real forward/rollback SQLite DDL migration with preserved bytes and negative records",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/reviewed/migration-safety-reviewer.json",
+        "receipt_sha256": "05add3be7a2a5e77f6daadb3defb127da3ccc859b2bcc2431b6d77ce1b99aa50",
+        "runner_path": "skills-manifest/reviewed-exercise.mjs",
+        "runner_sha256": "f0dd1b4776cc5c009fe4ae7a72e7ccdcb7ee8ffaab83af5de17a8849d0089a88"
+      }
     },
     {
       "id": "skill:loop-breaker",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Detect and stop no-progress debugging, retry, and tool-call loops while preserving repeated actions that make measurable progress. Use when the same action or error is recurring.",
       "source": {
-        "path": "../vibe-coding-skills/skills/debugging/loop-breaker/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "efbc58bd8bc0a57c27268cc5f9f32d08a08bbf063b042adbcc1e08f3f42cab7e"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/loop-breaker/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "efbc58bd8bc0a57c27268cc5f9f32d08a08bbf063b042adbcc1e08f3f42cab7e",
+        "upstream_blob_sha256": "7484e555cb3221214c8e649be4bc5d6b594f35955cc68ede28c3f70e3a4389a9",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/debugging/loop-breaker/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 3033 bytes on 2026-10-30"
+        "command": "node skills-manifest/twenty-second-exercise.mjs loop-breaker --write-receipt",
+        "output": "10 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Historical observations come from dated genuine Constellation QA logs, not live provider/tool telemetry",
+        "This is a bounded offline retry/progress decision exercise, not authority to terminate tasks or run unattended retries",
+        "No real MCP process, protocol handshake or app tool permission was installed",
+        "Upstream publisher account not authenticated beyond clean pinned local Git source"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/twenty-second-exercise.mjs loop-breaker --write-receipt",
+        "outcome": "passed",
+        "result": "Evaluate real nineteenth-to-source-freeze Constellation qualification observations and enforce bounded progress/retry decisions with adversarial histories",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/twenty-second/loop-breaker.json",
+        "receipt_sha256": "76711248d8225c26622407c076dfd933754857f975dcbf00cf0df113af7345e4",
+        "runner_path": "skills-manifest/twenty-second-exercise.mjs",
+        "runner_sha256": "b150e932be741bbf77df4f33484022db05e6ac782faaae66c16503b673ae9e60"
+      }
     },
     {
       "id": "skill:reproduction-builder",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Create the smallest reliable reproducer for a reported software failure before attempting a fix. Use when a bug is intermittent, environment-sensitive, or not covered by a failing test.",
       "source": {
-        "path": "../vibe-coding-skills/skills/debugging/reproduction-builder/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "8f6641a7488173283609e4a54b4f68497f220368f0bd8a18e9fb18abd734665a"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/reproduction-builder/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "8f6641a7488173283609e4a54b4f68497f220368f0bd8a18e9fb18abd734665a",
+        "upstream_blob_sha256": "08a8eefe6aa84180a05c1174e532cd9de4b8ce943105ffc046737f2e553cf571",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/debugging/reproduction-builder/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2744 bytes on 2026-10-30"
+        "command": "node skills-manifest/nineteenth-exercise.mjs reproduction-builder --write-receipt",
+        "output": "7 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Reproduces a real failure mode of the production local manifest validator on synthetic invalid input; it does not claim an existing user-facing defect",
+        "No source patch, external service, OS permission, or MCP runtime was used",
+        "This is an installed local development skill, never an MCP runtime",
+        "Git origin is observed locally; publisher account identity not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/nineteenth-exercise.mjs reproduction-builder --write-receipt",
+        "outcome": "passed",
+        "result": "Construct, run twice and minimize a deterministic Constellation duplicate-identity failure using two actual CLI records and the production manifest validator",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/nineteenth/reproduction-builder.json",
+        "receipt_sha256": "beacb4bc1c7f9eb649618833d56f15cb4df4f392df262f5450cbb6499168b488",
+        "runner_path": "skills-manifest/nineteenth-exercise.mjs",
+        "runner_sha256": "57831fae4883fd5172bd0f4bef2904a2b0c6d56cc308b9f2ea70007b2443e99c"
+      }
     },
     {
       "id": "skill:root-cause-debugger",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Reproduce technical failures and compare causal hypotheses",
       "source": {
-        "path": "../vibe-coding-skills/skills/debugging/root-cause-debugger/SKILL.md",
-        "provenance": "Sibling vibe-coding-skills git d532b2b52725cbd92b2815fbc98e1e516503137b",
-        "sha256": "09ea77211a962944007d22ad80cb89c74faf1e6aabda003be844c624c61a09cf"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/root-cause-debugger/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "09ea77211a962944007d22ad80cb89c74faf1e6aabda003be844c624c61a09cf",
+        "upstream_blob_sha256": "3175e9855dfbc2b4cb9c51dd14e011badf6e8e89e5465ddc94d6cd767236eb27",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/debugging/root-cause-debugger/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md; Get-FileHash -Algorithm SHA256; inspected trigger/safety/validation headings",
-        "output": "Source file and required sections observed",
-        "version": null
+        "command": "node skills-manifest/twenty-second-exercise.mjs root-cause-debugger --write-receipt",
+        "output": "10 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "No tested Codex task activation or measured behavior"
-      ]
+        "Actual prior incident and red state are established by historical QA evidence; original pre-refresh receipt is no longer present, so the original failing state was not reconstructed byte-for-byte",
+        "This is a bounded development diagnostic, not proof of a production client bug or new source code fix",
+        "No real MCP process, protocol handshake or app tool permission was installed",
+        "Upstream publisher account not authenticated beyond clean pinned local Git source"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/twenty-second-exercise.mjs root-cause-debugger --write-receipt",
+        "outcome": "passed",
+        "result": "Investigate the real Constellation nineteenth-wave stale-receipt incident with falsifiable source/runner hypotheses and independently exercised repair checks",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/twenty-second/root-cause-debugger.json",
+        "receipt_sha256": "12f9dbaf565c6b82b524e24357e41dc31a38aff40238dffff97a92f33a03c658",
+        "runner_path": "skills-manifest/twenty-second-exercise.mjs",
+        "runner_sha256": "b150e932be741bbf77df4f33484022db05e6ac782faaae66c16503b673ae9e60"
+      }
     },
     {
       "id": "skill:dependency-grounding-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Verify proposed packages, versions, imports, and upgrade claims against project state and authoritative package metadata. Use before adding or changing a dependency.",
       "source": {
-        "path": "../vibe-coding-skills/skills/dependencies/dependency-grounding-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "69d5aaebb09ee1631f31133c7ca123081f0a063e462322a7e7194364d6818084"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/dependency-grounding-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; source hash verified; publisher identity not independently authenticated",
+        "sha256": "69d5aaebb09ee1631f31133c7ca123081f0a063e462322a7e7194364d6818084",
+        "upstream_blob_sha256": "142d88a2cadd76338c913a8a0fb5f7982b3d7da91b90eafded919803cc62747f",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/dependencies/dependency-grounding-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2934 bytes on 2026-10-30"
+        "command": "node skills-manifest/reviewed-exercise.mjs dependency-grounding-auditor --write-receipt",
+        "output": "Observed 11 independently replayable offline checks against actual Constellation source and controlled negative fixtures. Source/license/managed install matched pinned local Git. No runtime MCP or publisher authentication."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Local development audit with bounded source/SQL fixtures; neither full feature validation nor runtime app integration",
+        "Uses local package.json, pnpm lockfile, Cargo manifest/lock and installed package metadata; no registry API, vulnerability lookup or remote publisher check",
+        "Selected Rust crates and two installed JS packages are tested; other transitive packages, imports and runtime behavior remain outside this focused audit",
+        "A passing receipt alone never establishes installation, permission, or runtime MCP qualification",
+        "Publisher identity was not independently authenticated; MIT license applies to observed pinned repository content"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/reviewed-exercise.mjs dependency-grounding-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Ground actual desktop JS/Rust direct dependencies in pinned lock records and installed package metadata, with synthetic stale and invented-version controls",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/reviewed/dependency-grounding-auditor.json",
+        "receipt_sha256": "2593d4cf9f26d15746862b400ce3eec53a19f405553ec1f6becf0e2bb917292f",
+        "runner_path": "skills-manifest/reviewed-exercise.mjs",
+        "runner_sha256": "f0dd1b4776cc5c009fe4ae7a72e7ccdcb7ee8ffaab83af5de17a8849d0089a88"
+      }
     },
     {
       "id": "skill:ci-failure-investigator",
@@ -609,242 +882,426 @@
     {
       "id": "skill:cross-platform-readiness-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Find shell, path, case, newline, permission, encoding, and runtime assumptions that break on Windows, macOS, or Linux. Use for cross-platform projects or platform-specific failures.",
       "source": {
-        "path": "../vibe-coding-skills/skills/deployment/cross-platform-readiness-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "76abdf270ae5d451a5a8cbf01435806445babdb965b2acf006fd3b1ab296ee44"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/cross-platform-readiness-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "76abdf270ae5d451a5a8cbf01435806445babdb965b2acf006fd3b1ab296ee44",
+        "upstream_blob_sha256": "c7ef3c0583a3ed74a5e4f8cd7b7c7a50471f89f1ab27a1a45295bcb6f10a2719",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/deployment/cross-platform-readiness-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2953 bytes on 2026-10-30"
+        "command": "node skills-manifest/exercise-local.mjs cross-platform-readiness-auditor --write-receipt",
+        "output": "Observed 8/8 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Windows-host Node path fixtures and source/CI review only; no macOS or Linux runner was executed here",
+        "CI job definitions do not attest to hosted CI outcomes, installed packages or real cross-platform GUI behavior",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs cross-platform-readiness-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Cross-check Constellation multi-OS CI, platform cleanup branches and OS-specific process environment with Unicode/space path fixtures and regressions",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/cross-platform-readiness-auditor.json",
+        "receipt_sha256": "279520aa80d31561281f5a0473f684562fe26a8a95f9970a9d477579a322c98d",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:environment-config-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Derive required configuration keys from code and manifests, detect missing/unused/misspelled variables, and verify fail-fast behavior. Use for environment-variable or deployment configuration changes.",
       "source": {
-        "path": "../vibe-coding-skills/skills/deployment/environment-config-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "41a9d222f797c2183e82112201362e984e4970d9e8b1529cfd8e0ae890cfcd12"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/environment-config-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "41a9d222f797c2183e82112201362e984e4970d9e8b1529cfd8e0ae890cfcd12",
+        "upstream_blob_sha256": "b8a2fa9094dc52596537cb8fa40e8197de95de8131b071828695336a0399f30e",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/deployment/environment-config-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 3092 bytes on 2026-10-30"
+        "command": "node skills-manifest/exercise-local.mjs environment-config-auditor --write-receipt",
+        "output": "Observed 8/8 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "The Vite branch is evaluated through a restricted interpreter of its inspected host/HMR expressions; no Vite process or deployed configuration store is started",
+        "Only explicitly observed dev-host, credential-reference and process environment controls are covered; no externally provisioned secret is accessed",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs environment-config-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Discover and evaluate Constellation Vite TAURI_DEV_HOST branches, credential fail-closed behavior and subprocess env isolation against bad-configuration mutations",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/environment-config-auditor.json",
+        "receipt_sha256": "1cffb3663f7d250da7c757650f7be9f2fb432e70b13d117277be56ed855fcf11",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:environment-parity-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Compare local, CI, container, and production assumptions for runtime versions, dependencies, services, paths, and build/start commands. Use when software works locally but fails elsewhere.",
       "source": {
-        "path": "../vibe-coding-skills/skills/deployment/environment-parity-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "a7656f255213bcda5168a62b4389dd24845a47dac3d92d4c19827efe43fd0af4"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/environment-parity-auditor/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "a7656f255213bcda5168a62b4389dd24845a47dac3d92d4c19827efe43fd0af4",
+        "upstream_blob_sha256": "8c7d19d6997ed6f74d964a53122277648b7edef9cec63c6c11fb432a316baf46",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/deployment/environment-parity-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2977 bytes on 2026-10-30"
+        "command": "node skills-manifest/eighteenth-exercise.mjs environment-parity-auditor --write-receipt",
+        "output": "7 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Analyzes actual workflow pins and lockfile imports; no clean container, Linux/macOS launch, installer startup or hosted CI was run",
+        "The presence of lock resolutions does not guarantee dependency security or a reproducible binary",
+        "No runtime MCP integration is provided or claimed by this local development skill",
+        "Publisher GitHub identity not authenticated beyond observed clean pinned local Git repository"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/eighteenth-exercise.mjs environment-parity-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Independently compare actual desktop dependency/importer and Node/pnpm CI environments with mutation checks",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/eighteenth/environment-parity-auditor.json",
+        "receipt_sha256": "0ca2fdaa816d5f07b5a90811685a020c446586c4b54d7dd819452edc1b2abbbd",
+        "runner_path": "skills-manifest/eighteenth-exercise.mjs",
+        "runner_sha256": "386d777390a28481786b1a0962986c849bbc7cdada8e309b2d49eea3e1c2faa8"
+      }
     },
     {
       "id": "skill:production-readiness-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Audit a service or application for deployability, health/readiness, logging, failure behavior, backup/recovery assumptions, and critical smoke checks. Use before a release or production handoff.",
       "source": {
-        "path": "../vibe-coding-skills/skills/deployment/production-readiness-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "f6aca598e29d73f75fed37e798adee7c1520eb26eb4624c4e15d315cf031b850"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/production-readiness-auditor/SKILL.md",
+        "provenance": "Exact managed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at d532b2b52725cbd92b2815fbc98e1e516503137b; account identity independently unverified",
+        "sha256": "f6aca598e29d73f75fed37e798adee7c1520eb26eb4624c4e15d315cf031b850",
+        "upstream_blob_sha256": "1306a10a7c841336451d29e874d7389e01d18133da853310f8357744db2faf20",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/deployment/production-readiness-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 3018 bytes on 2026-10-30"
+        "command": "node skills-manifest/twenty-fifth-exercise.mjs production-readiness-auditor --write-receipt",
+        "output": "10 independent assertions of an actual failed Windows release preflight, Git status/remote/lockfile corroboration and adverse false-green checks; production readiness is NOT certified; no MCP runtime."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "The audit correctly refuses release; it does not demonstrate a clean installed application start, production health endpoint, backup restore, or live external service",
+        "Hosted CI, signatures, public installers and actual provider/MCP interactions remain unverified",
+        "Current Git index/status and independently inspected source facts can change while workers edit; refresh only at a stable snapshot",
+        "Real PowerShell release preflight is independently recorded in QA; the trusted runner intentionally avoids calling the preflight because that calls this validator recursively",
+        "Publisher identity is unverified beyond the clean pinned local Git checkout"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/twenty-fifth-exercise.mjs production-readiness-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Independently probe current Constellation release prerequisites, classify verified blockers and reject forged readiness conclusions",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/twenty-fifth/production-readiness-auditor.json",
+        "receipt_sha256": "54074fa4a4c2c0916f1cce9faf44989d90be0b088bf2fca8c8ae3f54da33d9e0",
+        "runner_path": "skills-manifest/twenty-fifth-exercise.mjs",
+        "runner_sha256": "1d1ac3fb4347efb15a8da5f4444a71ec5b1af6abe231ddb66189d2d531dc0954"
+      }
     },
     {
       "id": "skill:documentation-accuracy-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Verify README, setup, examples, commands, API docs, screenshots/claims, and paths against the current repository. Use after implementation or before release.",
       "source": {
-        "path": "../vibe-coding-skills/skills/documentation/documentation-accuracy-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "c4b0eb9af487b3fc88a79ec3964a69f69146bf79a819b5f37ca5c5a79e0720a2"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/documentation-accuracy-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "c4b0eb9af487b3fc88a79ec3964a69f69146bf79a819b5f37ca5c5a79e0720a2",
+        "upstream_blob_sha256": "8bd93f2edae253c6ec4703326a60df1761356d04b5959188f491e790f55024ed",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/documentation/documentation-accuracy-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2848 bytes on 2026-10-30"
+        "command": "node skills-manifest/exercise-local.mjs documentation-accuracy-auditor --write-receipt",
+        "output": "Observed 23/23 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Only two explicitly identified current docs reviewed; external URLs and screenshots not checked",
+        "Claims about actual installed GUI behavior still require separate native Windows acceptance",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs documentation-accuracy-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Validate the updated Constellation Evidence/backup onboarding claims and all its local documentation links",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/documentation-accuracy-auditor.json",
+        "receipt_sha256": "d3546336bf375df56c79d51d24afb54149a89f0a232f595d1d79aba4250728f4",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:token-efficient-workflow",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Reduce repeated context, research, tool calls, and overengineering while preserving verification quality. Use when an agent is rereading the same material or spending heavily on low-value exploration.",
       "source": {
-        "path": "../vibe-coding-skills/skills/efficiency/token-efficient-workflow/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "9c99198959fa064e29e18579f27c6c55de016d4b1c22232835c538f18389045e"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/token-efficient-workflow/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "9c99198959fa064e29e18579f27c6c55de016d4b1c22232835c538f18389045e",
+        "upstream_blob_sha256": "672ac4fa4f268aa809adba1199af504d911abd181f65f6e9b1a7768391dcf271",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/efficiency/token-efficient-workflow/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 3067 bytes on 2026-10-30"
+        "command": "node skills-manifest/twenty-sixth-exercise.mjs token-efficient-workflow --write-receipt",
+        "output": "10 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This exercises real repository read operations only, not the ChatGPT client tool-call or token meter",
+        "No whole-repository 200-item milestone, CI cloud job, external model, or actual MCP runtime is claimed",
+        "A changed source digest fails the exercise rather than treating stale cached facts as efficient",
+        "Optimizes the distinct P10 source-orientation subtask, not overall agent reasoning quality",
+        "Pinned upstream Git origin does not independently verify publisher account identity"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/twenty-sixth-exercise.mjs token-efficient-workflow --write-receipt",
+        "outcome": "passed",
+        "result": "Measure redundant actual Constellation P10 repository evidence reads against single-pass digest-cached reads while preserving original strict CI, non-padding and receipt tests",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/twenty-sixth/token-efficient-workflow.json",
+        "receipt_sha256": "762e70d49b983fb048f7568ad802b1a61226962c1ad368ab8b25aae998f32280",
+        "runner_path": "skills-manifest/twenty-sixth-exercise.mjs",
+        "runner_sha256": "e369000594d87024c2c70e38d66fa38dc02bceb265ac1f13570c1d48e5bcaf9d"
+      }
     },
     {
       "id": "skill:accessibility-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Audit interactive UI for semantic structure, keyboard/focus behavior, accessible names, contrast, motion, and touch targets. Use for UI changes or accessibility review.",
       "source": {
-        "path": "../vibe-coding-skills/skills/frontend/accessibility-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "927c53442c220d259c31242ab87f3a4c833423a825802df1c97d8296eb2c2235"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/accessibility-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; source hash verified; publisher identity not independently authenticated",
+        "sha256": "927c53442c220d259c31242ab87f3a4c833423a825802df1c97d8296eb2c2235",
+        "upstream_blob_sha256": "32b35fa83bbe532343d91e0927e6f16c17b1859ec9f3f9d89edf2a3c14310721",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/frontend/accessibility-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2814 bytes on 2026-10-30"
+        "command": "node skills-manifest/reviewed-exercise.mjs accessibility-auditor --write-receipt",
+        "output": "Observed 6 independently replayable offline checks against actual Constellation source and controlled negative fixtures. Source/license/managed install matched pinned local Git. No runtime MCP or publisher authentication."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Local development audit with bounded source/SQL fixtures; neither full feature validation nor runtime app integration",
+        "Source semantics only: keyboard traversal, screen reader announcements, contrast ratios, touch and actual GUI were not exercised",
+        "This is not WCAG 2.2 compliance evidence; dynamic focus behavior and native screen reader tests remain pending",
+        "A passing receipt alone never establishes installation, permission, or runtime MCP qualification",
+        "Publisher identity was not independently authenticated; MIT license applies to observed pinned repository content"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/reviewed-exercise.mjs accessibility-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Review semantic keyboard, modal, alert and focus contracts of real Constellation UI with independent negative Svelte/CSS mutations",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/reviewed/accessibility-auditor.json",
+        "receipt_sha256": "5a1dda8e4dbf7eec8050f7783c25b1704acab2eca424b273b41fe5daec4c6436",
+        "runner_path": "skills-manifest/reviewed-exercise.mjs",
+        "runner_sha256": "f0dd1b4776cc5c009fe4ae7a72e7ccdcb7ee8ffaab83af5de17a8849d0089a88"
+      }
     },
     {
       "id": "skill:dead-feature-detector",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Trace visible controls, routes, commands, and integrations to real handlers and observable effects to find placeholders or hardcoded demos. Use before declaring a product feature complete.",
       "source": {
-        "path": "../vibe-coding-skills/skills/frontend/dead-feature-detector/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "990031b6846844f67a2be09288d9db38c96ac40d84d05141d05958ab76ab38fe"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/dead-feature-detector/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "990031b6846844f67a2be09288d9db38c96ac40d84d05141d05958ab76ab38fe",
+        "upstream_blob_sha256": "188c5910ef2fa141a1804080be1e2c9f3819a323b078499e6c806bf7bc192397",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/frontend/dead-feature-detector/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 3160 bytes on 2026-10-30"
+        "command": "node skills-manifest/seventeenth-exercise.mjs dead-feature-detector --write-receipt",
+        "output": "6 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Static UI-to-native name trace; no browser click or OS effect verified",
+        "A matched native command may still be inert; end-to-end feature completion remains unproven",
+        "Development-only skill; no real MCP runtime or app tool authorization was installed",
+        "Upstream publisher identity not independently authenticated; pinned local Git source and MIT license verified"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/seventeenth-exercise.mjs dead-feature-detector --write-receipt",
+        "outcome": "passed",
+        "result": "Trace actual Svelte invoke names to real native command implementations and reject missing-handler fixtures",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/seventeenth/dead-feature-detector.json",
+        "receipt_sha256": "4f544667757d517e33bc1f5db65bea01aa7d1da3cf207c4d65e9a321cc3c6151",
+        "runner_path": "skills-manifest/seventeenth-exercise.mjs",
+        "runner_sha256": "56469aed31b8e0e8cc29fdc1342fa629e7090dddc94dc7a5d236d0c3eb7f5da1"
+      }
     },
     {
       "id": "skill:responsive-design-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Verify changed UI across representative viewport widths for overflow, clipping, reflow, navigation, touch targets, and content priority. Use for frontend layout changes.",
       "source": {
-        "path": "../vibe-coding-skills/skills/frontend/responsive-design-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "9ee7310bf33aa0f8a0698628ee59c7450259d6a09af8c0716a7a4967039ae41e"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/responsive-design-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; source hash verified; publisher identity not independently authenticated",
+        "sha256": "9ee7310bf33aa0f8a0698628ee59c7450259d6a09af8c0716a7a4967039ae41e",
+        "upstream_blob_sha256": "7b75285ed6adcf451388c4b946f608151f4464f9cd029f173bcd5a6c11ca0b4e",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/frontend/responsive-design-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2758 bytes on 2026-10-30"
+        "command": "node skills-manifest/reviewed-exercise.mjs responsive-design-auditor --write-receipt",
+        "output": "Observed 7 independently replayable offline checks against actual Constellation source and controlled negative fixtures. Source/license/managed install matched pinned local Git. No runtime MCP or publisher authentication."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Local development audit with bounded source/SQL fixtures; neither full feature validation nor runtime app integration",
+        "Static CSS review only; no browser viewport render, screenshot, zoom/reflow measurement or pointer interaction executed",
+        "A matching CSS selector does not prove absence of horizontal overflow, clipped content, or all touch-target sizes",
+        "A passing receipt alone never establishes installation, permission, or runtime MCP qualification",
+        "Publisher identity was not independently authenticated; MIT license applies to observed pinned repository content"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/reviewed-exercise.mjs responsive-design-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Inspect concrete 320/520/760/1050px responsive stylesheet contracts for layout, hidden-menu keyboard safety, form reflow and text overflow",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/reviewed/responsive-design-auditor.json",
+        "receipt_sha256": "5f185072b11a8babd51c76e991fbd638577745a874074a419e838c613331d8bc",
+        "runner_path": "skills-manifest/reviewed-exercise.mjs",
+        "runner_sha256": "f0dd1b4776cc5c009fe4ae7a72e7ccdcb7ee8ffaab83af5de17a8849d0089a88"
+      }
     },
     {
       "id": "skill:ux-state-completeness-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Audit user flows for loading, empty, success, validation, partial, permission, offline, and error states. Use when async UI or data-driven workflows are added.",
       "source": {
-        "path": "../vibe-coding-skills/skills/frontend/ux-state-completeness-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "7f880e4dd9bdf34bf338f8fdada84403e3e89e0905c47a6935063775bd96fcfa"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/ux-state-completeness-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "7f880e4dd9bdf34bf338f8fdada84403e3e89e0905c47a6935063775bd96fcfa",
+        "upstream_blob_sha256": "3bfba98e7fd4a848ea095684a4dc6820838a4e9e1b67cc7a89985495ab0df718",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/frontend/ux-state-completeness-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2823 bytes on 2026-10-30"
+        "command": "node skills-manifest/exercise-local.mjs ux-state-completeness-auditor --write-receipt",
+        "output": "Observed 10/10 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Static Svelte file-action path only; actual screen-reader announcements, keyboard transitions and pending-state visuals require installed GUI tests",
+        "Does not assert that every app-wide async state, offline flow or provider error path has been exercised",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs ux-state-completeness-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Check Constellation local file-action UI review, pending/loading/error states, disabled controls and rejection recovery with targeted regressions",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/ux-state-completeness-auditor.json",
+        "receipt_sha256": "0f726963ca81090b1837f5cb5c2a340a70e727513188e23d9f96dcdf67aa5378",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:release-verification-agent",
@@ -873,75 +1330,128 @@
     {
       "id": "skill:agent-tool-trust-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Review tool-using agent workflows for prompt injection, untrusted-content authority confusion, excessive permissions, and unsafe action boundaries. Use when agents read external content and can mutate systems.",
       "source": {
-        "path": "../vibe-coding-skills/skills/security/agent-tool-trust-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "47a181c3c36852055f28adaf8513abae9e92e04e1258cdd5601c84c117f8913e"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/agent-tool-trust-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "47a181c3c36852055f28adaf8513abae9e92e04e1258cdd5601c84c117f8913e",
+        "upstream_blob_sha256": "aafb3012212e2ae0bf9ce48f2280461eb595c7b0474bfe24b85cba774809f601",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/security/agent-tool-trust-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 3078 bytes on 2026-10-30"
+        "command": "node skills-manifest/exercise-local.mjs agent-tool-trust-auditor --write-receipt",
+        "output": "Observed 10/10 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Static gate inspection and in-memory source mutations; does not prove physical user input or prevent privileged OS window-message injection",
+        "Only the bounded local file action path is audited, not arbitrary agent prompts, external MCPs or browser tools",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs agent-tool-trust-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Trace Constellation renderer-to-native tool authority and replay protection; reject simulated bypasses of consent, proof and click origin",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/agent-tool-trust-auditor.json",
+        "receipt_sha256": "f2d99fb14289fa550cf5fc25c7c6e713cca287083f43c1dab274fb3bfd4117d0",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:authentication-security-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Audit authentication flows for server-side identity verification, session/token handling, and bypass paths. Use when login, session, OAuth, API-key, or protected-route code changes.",
       "source": {
-        "path": "../vibe-coding-skills/skills/security/authentication-security-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "4d750d0d940e51dcb6f44106349d44cf4e657f021b0c1971e65572136e2f36ff"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/authentication-security-auditor/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "4d750d0d940e51dcb6f44106349d44cf4e657f021b0c1971e65572136e2f36ff",
+        "upstream_blob_sha256": "22f082cfdff2f1d50eacf1d91bc3a4dcb15bb330a291d519ced200ce4a8e138c",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/security/authentication-security-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2864 bytes on 2026-10-30"
+        "command": "node skills-manifest/eighteenth-exercise.mjs authentication-security-auditor --write-receipt",
+        "output": "7 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This is native consent proof auditing; login, OAuth, issuer, cookie and online identity-provider behavior are not present in this scope",
+        "No Windows physical consent interaction or OS credential-vault execution was performed in this audit",
+        "No runtime MCP integration is provided or claimed by this local development skill",
+        "Publisher GitHub identity not authenticated beyond observed clean pinned local Git repository"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/eighteenth-exercise.mjs authentication-security-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Audit Constellation native consent identity/digest proof and OS-vault fail-closed action gate, with privilege-bypass mutations",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/eighteenth/authentication-security-auditor.json",
+        "receipt_sha256": "d7622c7ae8e588907b8c6bbf999b1791a0efd94a5fc547321dbfeba74657d3df",
+        "runner_path": "skills-manifest/eighteenth-exercise.mjs",
+        "runner_sha256": "386d777390a28481786b1a0962986c849bbc7cdada8e309b2d49eea3e1c2faa8"
+      }
     },
     {
       "id": "skill:authorization-boundary-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Review ownership and object-level authorization boundaries",
       "source": {
-        "path": "../vibe-coding-skills/skills/security/authorization-boundary-auditor/SKILL.md",
-        "provenance": "Sibling vibe-coding-skills git d532b2b52725cbd92b2815fbc98e1e516503137b",
-        "sha256": "ea7da8b0ca3503620e1ecc9edb158dfaadd2641ecbc31fad182556828a49185d"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/authorization-boundary-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "ea7da8b0ca3503620e1ecc9edb158dfaadd2641ecbc31fad182556828a49185d",
+        "upstream_blob_sha256": "3ac9bfa2ef26f798adc5c3649f4fd3b719295984d5d43c64e2bedb743947c262",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/security/authorization-boundary-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md; Get-FileHash -Algorithm SHA256; inspected trigger/safety/validation headings",
-        "output": "Source file and required sections observed",
-        "version": null
+        "command": "node skills-manifest/exercise-local.mjs authorization-boundary-auditor --write-receipt",
+        "output": "Observed 10/10 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "No application-specific authorization audit exercised",
-        "No installation in Constellation"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Static authorization contract only: does not execute native dialogs, cross-user roles, access-control tokens or task cancellation races",
+        "Validates task-scoped local file actions; multi-tenant authorization is not claimed because this product has no proven tenant model",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs authorization-boundary-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Audit two-stage Pending-task authorization, server-derived scope, cancellation lock and one-use local file grants with mutation regressions",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/authorization-boundary-auditor.json",
+        "receipt_sha256": "ade53fc025290f9b9ef7da65041c256a8498b7f22c33731f7dbb68d9cc266f69",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:dependency-vulnerability-auditor",
@@ -970,123 +1480,213 @@
     {
       "id": "skill:injection-risk-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Trace untrusted input into SQL, shell, template, path, and other interpreter sinks. Use for security review or changes involving dynamic queries/commands.",
       "source": {
-        "path": "../vibe-coding-skills/skills/security/injection-risk-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "4666d5de06ed099ca71ad1a3a984326666b05a8c32dcd61b1a40324d47577692"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/injection-risk-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; source hash verified; publisher identity not independently authenticated",
+        "sha256": "4666d5de06ed099ca71ad1a3a984326666b05a8c32dcd61b1a40324d47577692",
+        "upstream_blob_sha256": "350c8fd369581f94c6b4dc66e355e2a943041a4638686e241cf3b96a6b1dc74b",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/security/injection-risk-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2687 bytes on 2026-10-30"
+        "command": "node skills-manifest/reviewed-exercise.mjs injection-risk-auditor --write-receipt",
+        "output": "Observed 6 independently replayable offline checks against actual Constellation source and controlled negative fixtures. Source/license/managed install matched pinned local Git. No runtime MCP or publisher authentication."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Local development audit with bounded source/SQL fixtures; neither full feature validation nor runtime app integration",
+        "Runs extracted SQLite statements, not Rust runtime dataflow or an end-to-end API penetration test",
+        "Only ID lookup source-to-sink path reviewed; other SQL and process sinks are out of scope",
+        "A passing receipt alone never establishes installation, permission, or runtime MCP qualification",
+        "Publisher identity was not independently authenticated; MIT license applies to observed pinned repository content"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/reviewed-exercise.mjs injection-risk-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Trace actual Rust ID lookup from bounded table allowlist to SQLite parameter binding; execute benign SQL injection and unsafe negative fixture",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/reviewed/injection-risk-auditor.json",
+        "receipt_sha256": "a814c9ef0903250f02d15a3abe9ab69e4ac7008424fb542439f04a9907f16ed3",
+        "runner_path": "skills-manifest/reviewed-exercise.mjs",
+        "runner_sha256": "f0dd1b4776cc5c009fe4ae7a72e7ccdcb7ee8ffaab83af5de17a8849d0089a88"
+      }
     },
     {
       "id": "skill:input-validation-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Audit server-side validation at trust boundaries for shape, type, range, format, size, and semantic constraints. Use for APIs, forms, uploads, imports, or external events.",
       "source": {
-        "path": "../vibe-coding-skills/skills/security/input-validation-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "84a8b27826773efb86ffc60196e71f79003447afd09b3548831dcfd09128b720"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/input-validation-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "84a8b27826773efb86ffc60196e71f79003447afd09b3548831dcfd09128b720",
+        "upstream_blob_sha256": "1230d4f8afd253fa0c211aa10042ba6e6db01f26d6044ff1bbcfe70fe540b12a",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/security/input-validation-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2710 bytes on 2026-10-30"
+        "command": "node skills-manifest/exercise-local.mjs input-validation-auditor --write-receipt",
+        "output": "Observed 7/7 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Static source checks cannot prove race freedom or prevent a malicious local filesystem actor",
+        "No fuzzer, installed GUI, oversized production database or real secret was used",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs input-validation-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Inspect user-input size and recovery safety boundaries across Svelte, Tauri, codec and SQLite CLI",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/input-validation-auditor.json",
+        "receipt_sha256": "17841ddcfb541f475d5ebe936ef7d9bc689bf14b355a5beaec8455db50b55952",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:secret-leakage-detector",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Find accidentally exposed secrets with redacted reporting",
       "source": {
-        "path": "../vibe-coding-skills/skills/security/secret-leakage-detector/SKILL.md",
-        "provenance": "Sibling vibe-coding-skills git d532b2b52725cbd92b2815fbc98e1e516503137b",
-        "sha256": "5a5db1ea91b179dd35f69a97baa83577a2a37f4cba025ff77604de3253215eaa"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/secret-leakage-detector/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "5a5db1ea91b179dd35f69a97baa83577a2a37f4cba025ff77604de3253215eaa",
+        "upstream_blob_sha256": "44c4992f1bc56974dc3d455baabb84cee482a0bfb7b22dd838f35467f8ac5667",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/security/secret-leakage-detector/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md; Get-FileHash -Algorithm SHA256; inspected trigger/safety/validation headings",
-        "output": "Source file and required sections observed",
-        "version": null
+        "command": "node skills-manifest/exercise-local.mjs secret-leakage-detector --write-receipt",
+        "output": "Observed 7/7 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Helper script only described; not executed against repository",
-        "Candidate source; not installed in Constellation"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Scan is limited to three known public desktop configuration files, plus a source-code credential-path inspection; it is not a complete repository/history or entropy scanner",
+        "No real credentials are created, printed or authenticated; mutation fixtures use synthetic fixed strings",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs secret-leakage-detector --write-receipt",
+        "outcome": "passed",
+        "result": "Scan Constellation desktop public configuration for credential literals, verify redacted findings, and reject synthetic private-key/token leaks",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/secret-leakage-detector.json",
+        "receipt_sha256": "dac0ce439165958f677b538b1970e182f0f880d80bed0d66a5286ea5c383b1db",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:security-misconfiguration-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Inspect runtime, web, container, and deployment configuration for unsafe production defaults. Use before release or when CORS, cookies, debug mode, network exposure, TLS, or headers change.",
       "source": {
-        "path": "../vibe-coding-skills/skills/security/security-misconfiguration-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "03ec33fcbe0fec509d1b88367b08cf956ed7d45aae74aa893b903d728590ebf6"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/security-misconfiguration-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "03ec33fcbe0fec509d1b88367b08cf956ed7d45aae74aa893b903d728590ebf6",
+        "upstream_blob_sha256": "0eb0604319eecea459bf3e17db00a81c8edc4352d5731f8ea6d5c19c9c3de654",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/security/security-misconfiguration-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2800 bytes on 2026-10-30"
+        "command": "node skills-manifest/exercise-local.mjs security-misconfiguration-auditor --write-receipt",
+        "output": "Observed 10/10 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Static configuration review only; platform WebView enforcement, network interception and actual permission tests require separately installed application QA",
+        "Vite TAURI_DEV_HOST override and CSP style unsafe-inline remain platform-specific considerations; release signing and hosted deployment are unverified",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs security-misconfiguration-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Verify local desktop CSP/permission/host defaults and provider redirect/proxy policy, with unsafe configuration fixtures",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/security-misconfiguration-auditor.json",
+        "receipt_sha256": "8d1ab3cae8ea67f5b19f03289c1acaf0b48043ed1db34faeb23c9c852e72d32d",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:api-contract-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Compare API producers, consumers, schemas, types, status codes, and error shapes to detect contract drift. Use for client/server changes or API versioning.",
       "source": {
-        "path": "../vibe-coding-skills/skills/testing/api-contract-auditor/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "2c3df25f17c8b5ebdc18e59720bdc1c67eeef2d408c2a01e96459d3e0621ac81"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/api-contract-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; local Git blob and source hash verified, publisher identity not independently authenticated",
+        "sha256": "2c3df25f17c8b5ebdc18e59720bdc1c67eeef2d408c2a01e96459d3e0621ac81",
+        "upstream_blob_sha256": "ba1525597a47e87b8ca2c96457065483b1912183139ba29b14e1b231eedaf1b1",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/testing/api-contract-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2613 bytes on 2026-10-30"
+        "command": "node skills-manifest/exercise-local.mjs api-contract-auditor --write-receipt",
+        "output": "Observed 11/11 passing source-audit checks in Constellation; see hashed receipt. Installation and pinned Git source/license matched locally."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This is a locally installed development audit skill, not a Constellation runtime MCP or tool-enabled agent",
+        "Static source contract checks do not exercise WebView2, serialization runtime, or native IPC",
+        "Additional historic provider and task commands are outside this focused exercise",
+        "Exact local Git revision and MIT license matched; upstream publisher identity was not independently authenticated"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/exercise-local.mjs api-contract-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Compare the three new Evidence/backup Tauri IPC producer and consumer contracts, including result assertions",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/api-contract-auditor.json",
+        "receipt_sha256": "e22c88182bc6ca17dcfe3ef1013b52b4f8a24be59044fdb2ed1c4022647d20ef",
+        "runner_path": "skills-manifest/exercise-local.mjs",
+        "runner_sha256": "b6e33d93f95cbbf0a9014469c6e92a83c29ee98c9aba214d6e824108b2c43942"
+      }
     },
     {
       "id": "skill:integration-reality-checker",
@@ -1115,75 +1715,129 @@
     {
       "id": "skill:missing-test-detector",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Map changed or critical behavior to automated checks and identify meaningful untested paths. Use after feature work, bug fixes, or when coverage appears misleading.",
       "source": {
-        "path": "../vibe-coding-skills/skills/testing/missing-test-detector/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "8d0a7d0aebcae34b97adb6ba957b7942907d3f1f1dc01c20e607763aaead6d87"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/missing-test-detector/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "8d0a7d0aebcae34b97adb6ba957b7942907d3f1f1dc01c20e607763aaead6d87",
+        "upstream_blob_sha256": "b6a0f99c73daaa073fafc25551b3823528c18422949e7080700f802ffc89ae26",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/testing/missing-test-detector/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2701 bytes on 2026-10-30"
+        "command": "node skills-manifest/seventeenth-exercise.mjs missing-test-detector --write-receipt",
+        "output": "5 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "Checks security test presence and selected assertions, not their current execution outcome",
+        "Full coverage, integration with native ToolHost and fault injection remain separately required",
+        "Development-only skill; no real MCP runtime or app tool authorization was installed",
+        "Upstream publisher identity not independently authenticated; pinned local Git source and MIT license verified"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/seventeenth-exercise.mjs missing-test-detector --write-receipt",
+        "outcome": "passed",
+        "result": "Map actual authenticated tool recovery APIs to independent negative security regression tests, including missing-test detection",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/seventeenth/missing-test-detector.json",
+        "receipt_sha256": "e9bbac3a28ad7387e68f433718aee9f8752a4baf4571b3f07b4aea18b8ff97eb",
+        "runner_path": "skills-manifest/seventeenth-exercise.mjs",
+        "runner_sha256": "56469aed31b8e0e8cc29fdc1342fa629e7090dddc94dc7a5d236d0c3eb7f5da1"
+      }
     },
     {
       "id": "skill:regression-detector",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Detect behavior regressions introduced by a change by comparing baselines, requirements, tests, and adjacent flows. Use after a fix, refactor, dependency change, or generated patch.",
       "source": {
-        "path": "../vibe-coding-skills/skills/testing/regression-detector/SKILL.md",
-        "provenance": "Read-only inspection of the sibling vibe-coding-skills source; author/repo identity not independently verified",
-        "sha256": "e62ba063dad67f0c7940693f322b69dde7ca7d8cccb480cde8d570d179da0198"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/regression-detector/SKILL.md",
+        "provenance": "Exact installed local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; publisher identity not independently authenticated",
+        "sha256": "e62ba063dad67f0c7940693f322b69dde7ca7d8cccb480cde8d570d179da0198",
+        "upstream_blob_sha256": "4871f75794ee025979eea0e68a328582ce552139677c942d5203d9d93bd92eb1",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/testing/regression-detector/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md, inspect name/description/safety/completion headings and calculate SHA-256 with Node crypto",
-        "output": "Local file observed with matching frontmatter, safety/completion sections and 2862 bytes on 2026-10-30"
+        "command": "node skills-manifest/eighteenth-exercise.mjs regression-detector --write-receipt",
+        "output": "6 real, individually replayable local audit assertions, including separate adverse fixtures and matched pinned source/license/managed install. No runtime MCP."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Source and sibling repository license reviewed; canonical upstream publisher not independently authenticated",
-        "Not installed in Constellation or exercised in the product; tool and dependency access not vetted"
-      ]
+        "This checks real source/test contracts and controlled adverse mutations; it does not run cargo or compare a baseline binary",
+        "After any production patch, run the exact relevant Rust tests and cross-platform CI before declaring zero regressions",
+        "No runtime MCP integration is provided or claimed by this local development skill",
+        "Publisher GitHub identity not authenticated beyond observed clean pinned local Git repository"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/eighteenth-exercise.mjs regression-detector --write-receipt",
+        "outcome": "passed",
+        "result": "Independently compare live permission gate behavior contract with five existing cross-scope tests and signed-journal regression cases",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/eighteenth/regression-detector.json",
+        "receipt_sha256": "62a6d31710e0186b3af79e624fdb5783def783c91e8c930acbbd057dafb0091e",
+        "runner_path": "skills-manifest/eighteenth-exercise.mjs",
+        "runner_sha256": "386d777390a28481786b1a0962986c849bbc7cdada8e309b2d49eea3e1c2faa8"
+      }
     },
     {
       "id": "skill:test-quality-auditor",
       "kind": "skill",
-      "status": "source_reviewed",
+      "status": "installed_vetted",
       "purpose": "Find vacuous tests, excessive mocks and weak regression signals",
       "source": {
-        "path": "../vibe-coding-skills/skills/testing/test-quality-auditor/SKILL.md",
-        "provenance": "Sibling vibe-coding-skills git d532b2b52725cbd92b2815fbc98e1e516503137b",
-        "sha256": "0d3c95974995ba68272909daf8043b8ca5e516f66bc368223bf8704640a6eed7"
+        "path": "%APPDATA%/chat-on-steroids/skills/constellation/test-quality-auditor/SKILL.md",
+        "provenance": "Exact local copy of https://github.com/aradmanamnaoon/vibe-coding-skills.git at commit d532b2b52725cbd92b2815fbc98e1e516503137b; source hash verified; publisher identity not independently authenticated",
+        "sha256": "0d3c95974995ba68272909daf8043b8ca5e516f66bc368223bf8704640a6eed7",
+        "upstream_blob_sha256": "05e5f4c4c269342c8f5f9b9a8b5f0d66840014f122aacf97ce4515d2d51cfec1",
+        "upstream_repo": "../vibe-coding-skills",
+        "upstream_path": "../vibe-coding-skills/skills/testing/test-quality-auditor/SKILL.md",
+        "upstream_revision": "d532b2b52725cbd92b2815fbc98e1e516503137b"
       },
       "evidence": {
-        "command": "Read SKILL.md; Get-FileHash -Algorithm SHA256; inspected trigger/safety/validation headings",
-        "output": "Source file and required sections observed",
-        "version": null
+        "command": "node skills-manifest/reviewed-exercise.mjs test-quality-auditor --write-receipt",
+        "output": "Observed 7 independently replayable offline checks against actual Constellation source and controlled negative fixtures. Source/license/managed install matched pinned local Git. No runtime MCP or publisher authentication."
       },
       "license": {
         "status": "verified",
         "spdx": "MIT",
-        "evidence": "../vibe-coding-skills/LICENSE"
+        "evidence": "%APPDATA%/chat-on-steroids/skills/constellation/LICENSE",
+        "sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409",
+        "upstream_blob_sha256": "a8d9d7c9fa67bc360622a9e4ba16b0e9f2b63994aa726003efbcc0de65f4f409"
       },
       "limitations": [
-        "Helper reported in source only; not run in Constellation",
-        "No exercised agent workflow"
-      ]
+        "Local development audit with bounded source/SQL fixtures; neither full feature validation nor runtime app integration",
+        "Audits named Rust test functions and key assertions; does not execute the native Rust suite or calculate coverage or mutation score",
+        "Synthetic source edits in companion Node tests verify this auditor flags missing assertions; OS-native GUI and real consent remain separate",
+        "A passing receipt alone never establishes installation, permission, or runtime MCP qualification",
+        "Publisher identity was not independently authenticated; MIT license applies to observed pinned repository content"
+      ],
+      "exercise": {
+        "command": "node skills-manifest/reviewed-exercise.mjs test-quality-auditor --write-receipt",
+        "outcome": "passed",
+        "result": "Map real native file-tool test functions to adversarial assertions for random ticket, confidentiality, proof binding, one-use and no-clobber behavior",
+        "observed_on": "2026-11-01",
+        "receipt_path": "skills-manifest/evidence/reviewed/test-quality-auditor.json",
+        "receipt_sha256": "387341dd1c6e37d9b2d829012c20d3bccb1c0f9ce80980c7dc23cdbe2c166815",
+        "runner_path": "skills-manifest/reviewed-exercise.mjs",
+        "runner_sha256": "f0dd1b4776cc5c009fe4ae7a72e7ccdcb7ee8ffaab83af5de17a8849d0089a88"
+      }
     },
     {
       "id": "skill:ui-flow-verifier",

@@ -4,6 +4,21 @@ use url::{Host, Url};
 
 use crate::{CoreError, ProviderId, Result};
 
+/// Wire protocol, independent of provider brand or where inference runs.
+/// All old saved profiles deserialize as OpenAI-compatible chat, preserving
+/// existing user data and preventing implicit migration to a new endpoint.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    #[default]
+    OpenaiChat,
+    OpenaiResponses,
+    AnthropicMessages,
+    GoogleGemini,
+    OllamaNative,
+    CustomCompatible,
+}
+
 /// Only references to credentials may be persisted. No API key value is a
 /// property of a provider profile or adapter.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -22,6 +37,8 @@ pub struct ProviderProfile {
     pub model_id: String,
     /// Base endpoint including optional API version prefix (e.g. https://host/v1).
     pub base_url: String,
+    #[serde(default)]
+    pub kind: ProviderKind,
     pub credentials: CredentialSource,
 }
 
@@ -109,6 +126,10 @@ pub struct ChatCompletionRequest {
     pub messages: Vec<ChatEntry>,
 }
 
+/// Conservative upper bound for a single OpenAI-compatible text completion.
+/// A provider may reject or ignore this parameter; this is not a cost quote.
+pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 512;
+
 /// An uncredentialed request description for a transport selected by the app.
 /// Never log or persist runtime authorization headers with this structure.
 #[derive(Clone, Debug, PartialEq)]
@@ -130,6 +151,14 @@ pub struct OpenAiCompatibleAdapter {
 impl OpenAiCompatibleAdapter {
     pub fn new(profile: ProviderProfile) -> Result<Self> {
         profile.validate()?;
+        if !matches!(
+            profile.kind,
+            ProviderKind::OpenaiChat | ProviderKind::CustomCompatible
+        ) {
+            return Err(CoreError::InvalidInput(
+                "provider is not an OpenAI-compatible chat protocol".into(),
+            ));
+        }
         Ok(Self { profile })
     }
 }
@@ -150,7 +179,11 @@ impl ProviderAdapter for OpenAiCompatibleAdapter {
         endpoint.set_path(&path);
         Ok(PreparedRequest {
             endpoint,
-            body: json!({"model": self.profile.model_id, "messages": request.messages}),
+            body: json!({
+                "model": self.profile.model_id,
+                "messages": request.messages,
+                "max_tokens": DEFAULT_MAX_OUTPUT_TOKENS
+            }),
             credential_source: self.profile.credentials.clone(),
         })
     }

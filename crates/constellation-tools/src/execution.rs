@@ -2,17 +2,18 @@
 //! model output must never call `approve` directly.
 //!
 //! The permission gate and one-shot approval are independent requirements.
-//! Receipts are in memory: an integrating host must persist them in its event
-//! store, together with approvals, before advertising crash-safe audit.
+//! An optional external journal durably records approvals and receipts before
+//! returning. Host code must also link them to the authoritative task store.
 //! This crate is not an OS sandbox. Path swaps by another privileged process,
-//! child process trees and process network egress require additional OS policy.
+//! process network egress require additional OS policy. Windows process trees
+//! are terminated using Job Objects, but this is not privilege isolation.
 
 use std::{
     collections::HashMap,
-    fs::{self, OpenOptions},
-    io::{Read, Write},
+    fs::{self},
+    io::Read,
     path::{Component, Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
@@ -24,17 +25,32 @@ use std::{
 use constellation_core::{
     AgentId, OperationId, PermissionGate, PermissionScope, RoomId, TaskId, ToolAction,
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
 
+use crate::verified_open::{self, DirectoryIdentity};
 use crate::{ReadReceipt, Result, ToolError, WorkspaceReader};
+
+#[path = "journal.rs"]
+mod journal;
+pub use journal::{AuthenticatedJournalAnchor, AuthenticatedJournalHead};
+use journal::{History, Journal};
+
+#[cfg(windows)]
+#[path = "windows_process.rs"]
+mod windows_process;
+
+#[cfg(unix)]
+#[path = "unix_process.rs"]
+mod unix_process;
 
 const MAX_COMMAND_ARGS: usize = 128;
 const MAX_ARGUMENT_BYTES: usize = 32_768;
 const MAX_TIMEOUT: Duration = Duration::from_secs(120);
 const POLL: Duration = Duration::from_millis(20);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct OperationContext {
     pub agent_id: AgentId,
     pub room_id: RoomId,
@@ -91,16 +107,20 @@ pub enum OperationRequest {
 enum Resolved {
     Read {
         file: PathBuf,
+        sha256: String,
+        bytes: usize,
     },
     Write {
         file: PathBuf,
         bytes: Vec<u8>,
         mode: WriteMode,
+        parent_identity: DirectoryIdentity,
     },
     Command {
         executable: PathBuf,
         executable_sha256: String,
         cwd: PathBuf,
+        cwd_identity: DirectoryIdentity,
         argv: Vec<String>,
         timeout: Duration,
         git: bool,
@@ -130,6 +150,8 @@ pub struct OperationPreview {
 pub enum OperationDetails {
     Read {
         canonical_file: PathBuf,
+        sha256: String,
+        bytes: usize,
     },
     Write {
         canonical_file: PathBuf,
@@ -158,10 +180,18 @@ impl PreparedOperation {
 
     pub fn preview(&self) -> OperationPreview {
         let details = match &self.resolved {
-            Resolved::Read { file } => OperationDetails::Read {
+            Resolved::Read {
+                file,
+                sha256,
+                bytes,
+            } => OperationDetails::Read {
                 canonical_file: file.clone(),
+                sha256: sha256.clone(),
+                bytes: *bytes,
             },
-            Resolved::Write { file, bytes, mode } => OperationDetails::Write {
+            Resolved::Write {
+                file, bytes, mode, ..
+            } => OperationDetails::Write {
                 canonical_file: file.clone(),
                 bytes: bytes.len(),
                 sha256: format!("{:x}", Sha256::digest(bytes)),
@@ -174,6 +204,7 @@ impl PreparedOperation {
                 argv,
                 timeout,
                 git,
+                ..
             } => OperationDetails::Command {
                 executable: executable.clone(),
                 executable_sha256: executable_sha256.clone(),
@@ -197,7 +228,7 @@ pub struct OperationApproval {
     pub digest: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum OperationOutcome {
     Succeeded,
     Failed,
@@ -206,7 +237,7 @@ pub enum OperationOutcome {
     OutputLimit,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ExecutionReceipt {
     pub operation_id: OperationId,
     pub digest: String,
@@ -215,6 +246,87 @@ pub struct ExecutionReceipt {
     pub exit_code: Option<i32>,
     pub output_sha256: Option<String>,
     pub failure_reason: Option<String>,
+}
+
+/// Metadata suitable for recovery UI. Never includes read/write payloads,
+/// process output, private resource paths, or free-form failure messages.
+/// An authenticated journal must be verified before producing this state.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum JournalOperationState {
+    Unknown,
+    ApprovedUnstarted {
+        digest: String,
+        context: OperationContext,
+    },
+    Denied {
+        digest: String,
+        context: OperationContext,
+    },
+    StartedUnfinished {
+        digest: String,
+        context: OperationContext,
+    },
+    Completed {
+        digest: String,
+        context: OperationContext,
+        outcome: OperationOutcome,
+    },
+}
+
+impl JournalOperationState {
+    /// A known operation must match both the exact preview commitment and all
+    /// three principal identifiers. Unknown IDs remain explicitly unknown.
+    pub fn verify_binding(&self, digest: &str, context: OperationContext) -> Result<()> {
+        let (stored_digest, stored_context) = match self {
+            Self::Unknown => return Ok(()),
+            Self::ApprovedUnstarted { digest, context }
+            | Self::Denied { digest, context }
+            | Self::StartedUnfinished { digest, context }
+            | Self::Completed {
+                digest, context, ..
+            } => (digest, context),
+        };
+        if stored_digest != digest || *stored_context != context {
+            return Err(ToolError::ApprovalMismatch);
+        }
+        Ok(())
+    }
+}
+
+fn state_from_history(
+    history: &HashMap<OperationId, History>,
+    operation_id: OperationId,
+) -> Result<JournalOperationState> {
+    let Some(entry) = history.get(&operation_id) else {
+        return Ok(JournalOperationState::Unknown);
+    };
+    // Older signed records omitted principal metadata on approval/denial.
+    // Completed old records can prove it via the authenticated receipt; old
+    // incomplete/denied records cannot prove it and must fail closed.
+    let context = entry
+        .context
+        .or_else(|| {
+            entry.receipt.as_ref().map(|r| OperationContext {
+                agent_id: r.scope.agent_id,
+                room_id: r.scope.room_id,
+                task_id: r.scope.task_id,
+            })
+        })
+        .ok_or(ToolError::InvalidJournal)?;
+    let digest = entry.digest.clone();
+    Ok(if let Some(receipt) = &entry.receipt {
+        JournalOperationState::Completed {
+            digest,
+            context,
+            outcome: receipt.outcome.clone(),
+        }
+    } else if entry.denied {
+        JournalOperationState::Denied { digest, context }
+    } else if entry.started {
+        JournalOperationState::StartedUnfinished { digest, context }
+    } else {
+        JournalOperationState::ApprovedUnstarted { digest, context }
+    })
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -266,6 +378,7 @@ pub struct LocalExecutor {
     reader: WorkspaceReader,
     max_output_bytes: usize,
     approvals: Mutex<HashMap<OperationId, ApprovalRecord>>,
+    journal: Option<Mutex<Journal>>,
 }
 
 impl LocalExecutor {
@@ -281,7 +394,172 @@ impl LocalExecutor {
             reader: WorkspaceReader::new(root, max_file_bytes)?,
             max_output_bytes,
             approvals: Mutex::new(HashMap::new()),
+            journal: None,
         })
+    }
+
+    /// Optional durable fail-closed approval/attempt/receipt log. The host
+    /// must select a private journal outside the agent workspace. An existing
+    /// journal is replayed without reviving prior unconsumed approvals; an
+    /// unfinished attempt is never automatically retried after a crash.
+    /// A second live owner or a stale crash lock prevents opening the journal.
+    pub fn with_journal(
+        root: impl AsRef<Path>,
+        max_file_bytes: u64,
+        max_output_bytes: usize,
+        journal_path: impl AsRef<Path>,
+    ) -> Result<Self> {
+        Self::open_with_journal(
+            root,
+            max_file_bytes,
+            max_output_bytes,
+            journal_path,
+            None,
+            None,
+        )
+    }
+
+    /// Durable HMAC-SHA256 authenticated audit log. The trusted host must
+    /// retrieve a stable, unpredictable 32-byte key from storage separate
+    /// from the journal (such as the OS credential store). A missing/wrong key
+    /// or altered journal refuses to open; there is no unsealed fallback.
+    /// An existing unsealed journal must not be opened in authenticated mode.
+    pub fn with_authenticated_journal(
+        root: impl AsRef<Path>,
+        max_file_bytes: u64,
+        max_output_bytes: usize,
+        journal_path: impl AsRef<Path>,
+        authentication_key: [u8; 32],
+    ) -> Result<Self> {
+        Self::open_with_journal(
+            root,
+            max_file_bytes,
+            max_output_bytes,
+            journal_path,
+            Some(authentication_key),
+            None,
+        )
+    }
+
+    /// Unlike the legacy unanchored constructor, every authenticated append
+    /// must also persist a separately held trusted chain head before the
+    /// corresponding operation can execute. A host-provided anchor failure
+    /// permanently quarantines the journal session; no approval is recovered.
+    pub fn with_anchored_authenticated_journal(
+        root: impl AsRef<Path>,
+        max_file_bytes: u64,
+        max_output_bytes: usize,
+        journal_path: impl AsRef<Path>,
+        authentication_key: [u8; 32],
+        anchor: Arc<dyn AuthenticatedJournalAnchor>,
+    ) -> Result<Self> {
+        Self::open_with_journal(
+            root,
+            max_file_bytes,
+            max_output_bytes,
+            journal_path,
+            Some(authentication_key),
+            Some(anchor),
+        )
+    }
+
+    fn open_with_journal(
+        root: impl AsRef<Path>,
+        max_file_bytes: u64,
+        max_output_bytes: usize,
+        journal_path: impl AsRef<Path>,
+        authentication_key: Option<[u8; 32]>,
+        anchor: Option<Arc<dyn AuthenticatedJournalAnchor>>,
+    ) -> Result<Self> {
+        let mut executor = Self::new(root, max_file_bytes, max_output_bytes)?;
+        let journal = match authentication_key {
+            Some(key) => match anchor {
+                Some(pin) => Journal::open_anchored_authenticated(
+                    journal_path.as_ref(),
+                    executor.root(),
+                    key,
+                    pin,
+                )?,
+                None => Journal::open_authenticated(journal_path.as_ref(), executor.root(), key)?,
+            },
+            None => Journal::open(journal_path.as_ref(), executor.root())?,
+        };
+        executor.approvals = Mutex::new(
+            journal
+                .history()
+                .iter()
+                .map(|(id, item)| {
+                    (
+                        *id,
+                        ApprovalRecord {
+                            digest: item.digest.clone(),
+                            consumed: true,
+                            receipt: item.receipt.clone(),
+                        },
+                    )
+                })
+                .collect(),
+        );
+        executor.journal = Some(Mutex::new(journal));
+        Ok(executor)
+    }
+
+    /// Query a journal already authenticated during executor construction.
+    /// A status query never dispatches, revives, or consumes an operation.
+    /// Only authenticated journals qualify; unsealed sessions fail closed.
+    pub fn journal_state(&self, operation_id: OperationId) -> Result<JournalOperationState> {
+        let journal = self.journal.as_ref().ok_or(ToolError::InvalidJournal)?;
+        let journal = journal.lock().map_err(|_| ToolError::InvalidJournal)?;
+        journal.authenticated_head()?;
+        state_from_history(journal.history(), operation_id)
+    }
+
+    /// Check the exact digest and principal before disclosing a known status.
+    pub fn journal_state_bound(
+        &self,
+        operation_id: OperationId,
+        digest: &str,
+        context: OperationContext,
+    ) -> Result<JournalOperationState> {
+        let state = self.journal_state(operation_id)?;
+        state.verify_binding(digest, context)?;
+        Ok(state)
+    }
+
+    /// Current authenticated chain head for storage in a separate trusted
+    /// checkpoint. Only an independently retained head can detect deletion
+    /// of an otherwise valid *complete suffix* of signed records.
+    pub fn authenticated_journal_head(&self) -> Result<AuthenticatedJournalHead> {
+        let journal = self.journal.as_ref().ok_or(ToolError::InvalidJournal)?;
+        journal
+            .lock()
+            .map_err(|_| ToolError::InvalidJournal)?
+            .authenticated_head()
+    }
+
+    /// Reopen an existing log for a read-only, fully authenticated lookup.
+    /// This does not acquire/create the writer lock and can inspect a log
+    /// whose live writer still owns it. A partial concurrent append fails
+    /// closed; callers may retry after the writer finishes. To detect valid
+    /// suffix removal, pass a chain head saved independently by the host.
+    pub fn lookup_authenticated_journal(
+        root: impl AsRef<Path>,
+        journal_path: impl AsRef<Path>,
+        authentication_key: [u8; 32],
+        operation_id: OperationId,
+        digest: &str,
+        context: OperationContext,
+        trusted_head: Option<&AuthenticatedJournalHead>,
+    ) -> Result<JournalOperationState> {
+        let root = WorkspaceReader::new(root, 1)?;
+        let verified =
+            Journal::inspect_authenticated(journal_path.as_ref(), root.root(), authentication_key)?;
+        if trusted_head.is_some_and(|expected| expected != &verified.head) {
+            return Err(ToolError::InvalidJournal);
+        }
+        let state = state_from_history(&verified.history, operation_id)?;
+        state.verify_binding(digest, context)?;
+        Ok(state)
     }
 
     pub fn root(&self) -> &Path {
@@ -298,7 +576,24 @@ impl LocalExecutor {
         let (action, resource, resolved) = match request {
             OperationRequest::Read { path } => {
                 let file = self.reader.canonical_resource(path)?;
-                (ToolAction::ReadFile, file.clone(), Resolved::Read { file })
+                // Bind approval to the exact bytes observed at preparation.
+                // Nothing is returned to the renderer until a separate native
+                // confirmation and the same SHA has been checked at dispatch.
+                let content = self.reader.read_candidate(&file)?;
+                if std::str::from_utf8(&content).is_err() {
+                    return Err(ToolError::NonTextFile);
+                }
+                let sha256 = format!("{:x}", Sha256::digest(&content));
+                let bytes = content.len();
+                (
+                    ToolAction::ReadFile,
+                    file.clone(),
+                    Resolved::Read {
+                        file,
+                        sha256,
+                        bytes,
+                    },
+                )
             }
             OperationRequest::Write { path, bytes, mode } => {
                 if bytes.len() as u64 > self.reader_limit() || bytes.is_empty() {
@@ -310,10 +605,17 @@ impl LocalExecutor {
                     }
                 }
                 let file = self.write_target(&path)?;
+                let parent_identity =
+                    verified_open::pin_parent(self.reader.root(), &path)?.identity();
                 (
                     ToolAction::WriteFile,
                     file.clone(),
-                    Resolved::Write { file, bytes, mode },
+                    Resolved::Write {
+                        file,
+                        bytes,
+                        mode,
+                        parent_identity,
+                    },
                 )
             }
             OperationRequest::Process {
@@ -325,6 +627,13 @@ impl LocalExecutor {
                 let executable = executable_file(&executable)?;
                 let executable_sha256 = hash_executable(&executable)?;
                 let cwd = self.workspace_dir(&working_dir)?;
+                let cwd_identity = verified_open::pin_parent(
+                    self.reader.root(),
+                    &cwd.strip_prefix(self.reader.root())
+                        .map_err(|_| ToolError::ScopeEscape)?
+                        .join(".constellation-cwd-pin"),
+                )?
+                .identity();
                 validate_args(&args, timeout)?;
                 (
                     ToolAction::ExecuteCommand,
@@ -333,6 +642,7 @@ impl LocalExecutor {
                         executable,
                         executable_sha256,
                         cwd,
+                        cwd_identity,
                         argv: args,
                         timeout,
                         git: false,
@@ -348,12 +658,17 @@ impl LocalExecutor {
                 let executable = executable_file(&executable)?;
                 let executable_sha256 = hash_executable(&executable)?;
                 let cwd = self.workspace_dir(&repository)?;
+                let cwd_identity = verified_open::pin_parent(
+                    self.reader.root(),
+                    &cwd.strip_prefix(self.reader.root())
+                        .map_err(|_| ToolError::ScopeEscape)?
+                        .join(".constellation-cwd-pin"),
+                )?
+                .identity();
                 if !cwd.join(".git").exists() {
                     return Err(ToolError::InvalidCommand);
                 }
-                if matches!(action, GitAction::Push { .. }) {
-                    validate_git_push_config(&cwd)?;
-                }
+                validate_git_configuration(&cwd, matches!(action, GitAction::Push { .. }))?;
                 let (permission, argv) = git_args(&action)?;
                 validate_args(&argv, timeout)?;
                 (
@@ -363,6 +678,7 @@ impl LocalExecutor {
                         executable,
                         executable_sha256,
                         cwd,
+                        cwd_identity,
                         argv,
                         timeout,
                         git: true,
@@ -374,9 +690,10 @@ impl LocalExecutor {
             .to_str()
             .ok_or(ToolError::InvalidRelativePath)?
             .to_owned();
-        // Push grants are deliberately narrower than general execute grants:
-        // the exact repository, remote and ref are part of the permission
-        // resource in addition to the one-use approval digest.
+        // Command permissions are bound to their exact invocation, not merely
+        // an executable that could be reused with different arguments or cwd.
+        // The preview carries the complete argv for human review; the grant
+        // holds a fingerprint to avoid leaking sensitive arguments into logs.
         let resource = if action == ToolAction::GitPush {
             let Resolved::Command { cwd, argv, .. } = &resolved else {
                 return Err(ToolError::InvalidCommand);
@@ -386,6 +703,23 @@ impl LocalExecutor {
                 .ok_or(ToolError::InvalidCommand)?;
             let reference = argv.last().ok_or(ToolError::InvalidCommand)?;
             format!("git-push executable={resource:?} repository={cwd:?} remote={remote:?} ref={reference:?}")
+        } else if let Resolved::Command {
+            cwd,
+            argv,
+            timeout,
+            git,
+            ..
+        } = &resolved
+        {
+            let mut arguments_hash = Sha256::new();
+            for arg in argv {
+                feed(&mut arguments_hash, arg.as_bytes());
+            }
+            format!(
+                "command executable={resource:?} cwd={cwd:?} args_sha256={:x} timeout_ns={} git={git}",
+                arguments_hash.finalize(),
+                timeout.as_nanos(),
+            )
         } else {
             resource
         };
@@ -420,6 +754,20 @@ impl LocalExecutor {
         if approvals.contains_key(&operation_id) {
             return Err(ToolError::OperationReplay);
         }
+        if let Some(journal) = &self.journal {
+            journal
+                .lock()
+                .map_err(|_| ToolError::InvalidJournal)?
+                .approve(
+                    operation_id,
+                    &operation.digest,
+                    OperationContext {
+                        agent_id: operation.scope.agent_id,
+                        room_id: operation.scope.room_id,
+                        task_id: operation.scope.task_id,
+                    },
+                )?;
+        }
         approvals.insert(
             operation_id,
             ApprovalRecord {
@@ -434,8 +782,108 @@ impl LocalExecutor {
         })
     }
 
-    /// Uses approval exactly once, even when execution fails or is cancelled.
-    /// Returns an attempt receipt plus optional output on all dispatched paths.
+    /// Record an explicit user rejection against this exact prepared action.
+    /// The operation ID becomes unusable even after reopening a durable log;
+    /// rejection never grants a permission scope or executes the action.
+    /// Trusted host code must call this after receiving the user's decision.
+    pub fn deny(&self, operation_id: OperationId, operation: &PreparedOperation) -> Result<()> {
+        let mut approvals = self
+            .approvals
+            .lock()
+            .map_err(|_| ToolError::ApprovalMismatch)?;
+        if approvals.contains_key(&operation_id) {
+            return Err(ToolError::OperationReplay);
+        }
+        if let Some(journal) = &self.journal {
+            journal
+                .lock()
+                .map_err(|_| ToolError::InvalidJournal)?
+                .deny(
+                    operation_id,
+                    &operation.digest,
+                    OperationContext {
+                        agent_id: operation.scope.agent_id,
+                        room_id: operation.scope.room_id,
+                        task_id: operation.scope.task_id,
+                    },
+                )?;
+        }
+        approvals.insert(
+            operation_id,
+            ApprovalRecord {
+                digest: operation.digest.clone(),
+                consumed: true,
+                receipt: None,
+            },
+        );
+        Ok(())
+    }
+
+    /// Durably reject a model-proposed read before inspecting its target.
+    /// The lexical path and principal identify this denial for journal replay,
+    /// but no stat, canonicalization, read, size or file-existence check occurs.
+    /// Only the trusted host may invoke this on an independently denied read.
+    /// The pathname itself is not persisted in the audit record.
+    pub fn deny_unprepared_read(
+        &self,
+        operation_id: OperationId,
+        context: OperationContext,
+        relative_path: impl AsRef<Path>,
+    ) -> Result<()> {
+        let relative_path = relative_path.as_ref();
+        let path = relative_path
+            .to_str()
+            .ok_or(ToolError::InvalidRelativePath)?;
+        if path.is_empty()
+            || path.len() > 1024
+            || !path.is_ascii()
+            || !relative_path
+                .components()
+                .all(|item| matches!(item, Component::Normal(_)))
+        {
+            return Err(ToolError::InvalidRelativePath);
+        }
+        // Length-delimited, domain-separated commitment; no filesystem read.
+        // This is an audit identity, not a filesystem-content checksum or an
+        // authorization token, and must not be accepted as an approval digest.
+        let identity = serde_json::to_vec(&(
+            "constellation-rejected-unprepared-read-v1",
+            self.root().to_string_lossy().as_ref(),
+            context.agent_id.to_string(),
+            context.room_id.to_string(),
+            context.task_id.to_string(),
+            path,
+        ))
+        .map_err(|_| ToolError::InvalidRelativePath)?;
+        let digest = format!("{:x}", Sha256::digest(&identity));
+        let mut approvals = self
+            .approvals
+            .lock()
+            .map_err(|_| ToolError::ApprovalMismatch)?;
+        if approvals.contains_key(&operation_id) {
+            return Err(ToolError::OperationReplay);
+        }
+        if let Some(journal) = &self.journal {
+            journal
+                .lock()
+                .map_err(|_| ToolError::InvalidJournal)?
+                .deny(operation_id, &digest, context)?;
+        }
+        approvals.insert(
+            operation_id,
+            ApprovalRecord {
+                digest,
+                consumed: true,
+                receipt: None,
+            },
+        );
+        Ok(())
+    }
+
+    /// Uses approval exactly once, even when permission was revoked, execution
+    /// fails, or the attempt is cancelled. A matching attempted dispatch is
+    /// recorded before checking the current grant, so regranting cannot revive
+    /// a stale approval. Returns an attempt receipt plus optional output.
     pub fn execute(
         &self,
         gate: &PermissionGate,
@@ -443,8 +891,11 @@ impl LocalExecutor {
         operation: PreparedOperation,
         cancellation: &CancellationToken,
     ) -> Result<(ExecutionReceipt, Option<ExecutionOutput>)> {
-        ensure_permission(gate, &operation.scope)?;
         if approval.digest != operation.digest {
+            // An unapproved *different* request is not a dispatch of this
+            // approval. Preserve the distinct scope-denial response without
+            // consuming the unrelated, correctly bound operation.
+            ensure_permission(gate, &operation.scope)?;
             return Err(ToolError::ApprovalMismatch);
         }
         {
@@ -461,14 +912,28 @@ impl LocalExecutor {
             if record.consumed {
                 return Err(ToolError::OperationReplay);
             }
+            if let Some(journal) = &self.journal {
+                journal
+                    .lock()
+                    .map_err(|_| ToolError::InvalidJournal)?
+                    .start(approval.operation_id, &operation.digest)?;
+            }
             record.consumed = true;
         }
 
-        let outcome = if cancellation.is_cancelled() {
-            Ok((OperationOutcome::Cancelled, None, None))
-        } else {
-            match operation.resolved {
-                Resolved::Read { file } => self
+        // A revoked grant must terminate this *attempt*, not leave the old
+        // one-use approval pending until the user grants the scope again.
+        // The Start record has already been fsynced (if journaling is enabled)
+        // and the in-memory approval consumed before this authorization check.
+        let outcome = match ensure_permission(gate, &operation.scope) {
+            Err(error) => Err(error),
+            Ok(()) if cancellation.is_cancelled() => Ok((OperationOutcome::Cancelled, None, None)),
+            Ok(()) => match operation.resolved {
+                Resolved::Read {
+                    file,
+                    sha256,
+                    bytes,
+                } => self
                     .reader
                     .read(
                         gate,
@@ -478,35 +943,63 @@ impl LocalExecutor {
                         file.strip_prefix(self.reader.root())
                             .map_err(|_| ToolError::ScopeEscape)?,
                     )
-                    .map(|data| {
-                        (
+                    .and_then(|data| {
+                        if data.sha256 != sha256 || data.bytes_read != bytes {
+                            return Err(ToolError::ReadContentConflict);
+                        }
+                        Ok((
                             OperationOutcome::Succeeded,
                             Some(ExecutionOutput::Read(data)),
                             None,
-                        )
+                        ))
                     }),
-                Resolved::Write { file, bytes, mode } => {
-                    self.write(&file, &bytes, &mode, cancellation).map(|data| {
+                Resolved::Write {
+                    file,
+                    bytes,
+                    mode,
+                    parent_identity,
+                } => self
+                    .write(&file, &bytes, &mode, parent_identity, cancellation)
+                    .map(|data| {
                         (
                             OperationOutcome::Succeeded,
                             Some(ExecutionOutput::Write(data)),
                             None,
                         )
-                    })
-                }
+                    }),
                 Resolved::Command {
                     executable,
                     executable_sha256,
                     cwd,
+                    cwd_identity,
                     argv,
                     timeout,
                     git,
                 } => {
-                    let validated = if operation.scope.action == ToolAction::GitPush {
-                        validate_git_push_config(&cwd)
-                    } else {
-                        Ok(())
-                    };
+                    // The workspace may have been changed since the user saw
+                    // the preview. Refuse a moved or reparse-linked directory
+                    // before opening a process with access to it.
+                    let validated = cwd
+                        .strip_prefix(self.reader.root())
+                        .map_err(|_| ToolError::ScopeEscape)
+                        .and_then(|relative| self.workspace_dir(relative))
+                        .and_then(|current| {
+                            if current == cwd {
+                                Ok(())
+                            } else {
+                                Err(ToolError::ScopeEscape)
+                            }
+                        })
+                        .and_then(|()| {
+                            if git {
+                                validate_git_configuration(
+                                    &cwd,
+                                    operation.scope.action == ToolAction::GitPush,
+                                )
+                            } else {
+                                Ok(())
+                            }
+                        });
                     validated.and_then(|()| {
                         run_process(
                             executable,
@@ -518,11 +1011,14 @@ impl LocalExecutor {
                             ProcessRunControl {
                                 max_output: self.max_output_bytes,
                                 cancel: cancellation,
+                                workspace_root: self.reader.root(),
+                                cwd_identity,
+                                git_push: operation.scope.action == ToolAction::GitPush,
                             },
                         )
                     })
                 }
-            }
+            },
         };
         let (status, output, exit_code, failure_reason) = match outcome {
             Ok((status, output, code)) => {
@@ -582,6 +1078,12 @@ impl LocalExecutor {
             .approvals
             .lock()
             .map_err(|_| ToolError::ApprovalMismatch)?;
+        if let Some(journal) = &self.journal {
+            journal
+                .lock()
+                .map_err(|_| ToolError::InvalidJournal)?
+                .finish(&receipt)?;
+        }
         if let Some(record) = approvals.get_mut(&approval.operation_id) {
             record.receipt = Some(receipt.clone());
         }
@@ -645,6 +1147,7 @@ impl LocalExecutor {
         file: &Path,
         bytes: &[u8],
         mode: &WriteMode,
+        parent_identity: DirectoryIdentity,
         cancel: &CancellationToken,
     ) -> Result<WriteReceipt> {
         let relative = file
@@ -653,66 +1156,76 @@ impl LocalExecutor {
         if self.write_target(relative)? != file {
             return Err(ToolError::ScopeEscape);
         }
+        // The directory must be the exact object present during approval.
+        // Keep the handle alive through staging and publishing.
+        let pinned = verified_open::pin_parent(self.reader.root(), relative)?;
+        if pinned.identity() != parent_identity {
+            return Err(ToolError::ScopeEscape);
+        }
         if cancel.is_cancelled() {
             return Err(ToolError::Cancelled);
         }
         let digest = format!("{:x}", Sha256::digest(bytes));
         match mode {
             WriteMode::CreateNew => {
-                let mut output = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(file)
-                    .map_err(|e| {
-                        if e.kind() == std::io::ErrorKind::AlreadyExists {
-                            ToolError::FileAlreadyExists
-                        } else {
-                            ToolError::Io(e)
-                        }
-                    })?;
-                if let Err(error) = output.write_all(bytes).and_then(|()| output.sync_all()) {
-                    drop(output);
-                    let _ = fs::remove_file(file);
-                    return Err(error.into());
-                }
+                // Stage and sync before publishing a name in the workspace.
+                // A failed/cancelled write never exposes a partial target and
+                // cannot delete an unrelated file placed there meanwhile.
+                let mut staged = pinned.stage(file, bytes)?;
+                let result = (|| -> Result<()> {
+                    if self.write_target(relative)? != file {
+                        return Err(ToolError::ScopeEscape);
+                    }
+                    if verified_open::pin_parent(self.reader.root(), relative)?.identity()
+                        != parent_identity
+                    {
+                        return Err(ToolError::ScopeEscape);
+                    }
+                    if cancel.is_cancelled() {
+                        return Err(ToolError::Cancelled);
+                    }
+                    // Hard-link creation is atomic and refuses all existing
+                    // destination entries, including dangling symlinks.
+                    pinned.publish_new(&staged, file)?;
+                    Ok(())
+                })();
+                let _ = pinned.cleanup(&mut staged);
+                result?;
             }
             WriteMode::ReplaceIfSha256(expected) => {
                 if !file.exists() {
                     return Err(ToolError::ContentConflict);
                 }
-                let original = read_bounded(file, self.reader_limit())?;
+                let original = self.reader.read_candidate(file)?;
                 if !format!("{:x}", Sha256::digest(original)).eq_ignore_ascii_case(expected) {
                     return Err(ToolError::ContentConflict);
                 }
                 if cancel.is_cancelled() {
                     return Err(ToolError::Cancelled);
                 }
-                let tmp =
-                    file.with_extension(format!("constellation-{}.tmp", uuid::Uuid::new_v4()));
+                let mut tmp = pinned.stage(file, bytes)?;
                 let staged = (|| -> Result<()> {
-                    let mut output = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
-                    output.write_all(bytes)?;
-                    output.sync_all()?;
-                    drop(output);
                     // Re-check before replacement. A malicious concurrent local
                     // process can still race this check; OS handles are needed.
                     if self.write_target(relative)? != file
-                        || !format!(
-                            "{:x}",
-                            Sha256::digest(read_bounded(file, self.reader_limit())?)
-                        )
-                        .eq_ignore_ascii_case(expected)
+                        || !format!("{:x}", Sha256::digest(self.reader.read_candidate(file)?))
+                            .eq_ignore_ascii_case(expected)
                     {
                         return Err(ToolError::ContentConflict);
+                    }
+                    if verified_open::pin_parent(self.reader.root(), relative)?.identity()
+                        != parent_identity
+                    {
+                        return Err(ToolError::ScopeEscape);
                     }
                     if cancel.is_cancelled() {
                         return Err(ToolError::Cancelled);
                     }
-                    replace_file(&tmp, file)?;
+                    pinned.publish_replace(&mut tmp, file)?;
                     Ok(())
                 })();
                 if staged.is_err() {
-                    let _ = fs::remove_file(&tmp);
+                    let _ = pinned.cleanup(&mut tmp);
                 }
                 staged?;
             }
@@ -857,6 +1370,10 @@ fn git_args(action: &GitAction) -> Result<(ToolAction, Vec<String>)> {
         "protocol.ext.allow=never".into(),
         "-c".into(),
         "protocol.file.allow=never".into(),
+        "-c".into(),
+        "push.gpgSign=false".into(),
+        "-c".into(),
+        "push.recurseSubmodules=no".into(),
     ];
     let action_type = match action {
         GitAction::Status => {
@@ -898,28 +1415,91 @@ fn git_args(action: &GitAction) -> Result<(ToolAction, Vec<String>)> {
     Ok((action_type, args))
 }
 
-fn validate_git_push_config(repo: &Path) -> Result<()> {
-    // Reject local URL rewrite and include directives before an outbound push.
-    // User-approved URL is passed directly to Git (not an alias). A malicious
-    // concurrent process can still race .git/config; callers must isolate
-    // untrusted worktrees before permitting an irreversible push.
+fn validate_git_configuration(repo: &Path, push: bool) -> Result<()> {
+    // Git's local configuration may launch programs through filter.clean,
+    // filter.process, diff drivers, credential helpers or includes even when
+    // fixed argv, hooksPath, environment and external diff are sanitized.
+    // Inspect before approval and immediately before dispatch. Fail closed on
+    // executable-capable sections; ordinary core/branch/remote/user settings
+    // remain usable. This is not a parser or race-proof filesystem sandbox.
     let git_dir = repo.join(".git");
     let config = git_dir.join("config");
-    if !git_dir.is_dir()
-        || is_reparse(&fs::symlink_metadata(&git_dir)?)
-        || is_reparse(&fs::symlink_metadata(&config)?)
-    {
+    if !git_dir.is_dir() || is_reparse(&fs::symlink_metadata(&git_dir)?) {
+        return Err(ToolError::InvalidCommand);
+    }
+    if !config.exists() && !push {
+        return Ok(());
+    }
+    if is_reparse(&fs::symlink_metadata(&config)?) || !fs::metadata(&config)?.is_file() {
         return Err(ToolError::InvalidCommand);
     }
     let content = String::from_utf8(read_bounded(&config, 262_144)?)
         .map_err(|_| ToolError::InvalidCommand)?;
-    let lowered = content.to_ascii_lowercase();
-    if lowered.contains("insteadof")
-        || lowered.contains("[url ")
-        || lowered.contains("[include")
-        || lowered.contains("worktreeconfig")
-    {
-        return Err(ToolError::InvalidCommand);
+    let mut section = String::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
+            continue;
+        }
+        if let Some(header) = line.strip_prefix('[') {
+            // No malformed/unknown section can hide an include or command.
+            let header = header.split_once(']').ok_or(ToolError::InvalidCommand)?.0;
+            section = header
+                .split(|c: char| c.is_ascii_whitespace() || c == '.')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !matches!(
+                section.as_str(),
+                "core"
+                    | "user"
+                    | "branch"
+                    | "remote"
+                    | "init"
+                    | "gc"
+                    | "maintenance"
+                    | "extensions"
+                    | "fetch"
+                    | "push"
+                    | "pack"
+                    | "repack"
+                    | "index"
+                    | "status"
+                    | "log"
+                    | "commit"
+            ) {
+                return Err(ToolError::InvalidCommand);
+            }
+        } else {
+            if section.is_empty() {
+                return Err(ToolError::InvalidCommand);
+            }
+            let key = line
+                .split(|c: char| c == '=' || c.is_ascii_whitespace())
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if key.is_empty()
+                || (section == "core"
+                    && matches!(
+                        key.as_str(),
+                        "worktree"
+                            | "fsmonitor"
+                            | "hookspath"
+                            | "gitproxy"
+                            | "sshcommand"
+                            | "pager"
+                            | "attributesfile"
+                            | "excludesfile"
+                            | "alternate"
+                    ))
+                || (section == "extensions" && key == "worktreeconfig")
+                || (section == "remote"
+                    && matches!(key.as_str(), "uploadpack" | "receivepack" | "vcs"))
+            {
+                return Err(ToolError::InvalidCommand);
+            }
+        }
     }
     Ok(())
 }
@@ -950,20 +1530,33 @@ fn operation_digest(scope: &PermissionScope, resolved: &Resolved) -> String {
         feed(&mut hasher, value.as_bytes());
     }
     match resolved {
-        Resolved::Read { file } => {
+        Resolved::Read {
+            file,
+            sha256,
+            bytes,
+        } => {
             feed(&mut hasher, b"read");
             feed(&mut hasher, file.to_str().unwrap_or("").as_bytes());
+            feed(&mut hasher, sha256.as_bytes());
+            feed(&mut hasher, &(*bytes as u64).to_le_bytes());
         }
-        Resolved::Write { file, bytes, mode } => {
+        Resolved::Write {
+            file,
+            bytes,
+            mode,
+            parent_identity,
+        } => {
             feed(&mut hasher, b"write");
             feed(&mut hasher, file.to_str().unwrap_or("").as_bytes());
             feed(&mut hasher, format!("{mode:?}").as_bytes());
+            feed(&mut hasher, format!("{parent_identity:?}").as_bytes());
             feed(&mut hasher, bytes);
         }
         Resolved::Command {
             executable,
             executable_sha256,
             cwd,
+            cwd_identity,
             argv,
             timeout,
             git,
@@ -972,6 +1565,7 @@ fn operation_digest(scope: &PermissionScope, resolved: &Resolved) -> String {
             feed(&mut hasher, executable.to_str().unwrap_or("").as_bytes());
             feed(&mut hasher, executable_sha256.as_bytes());
             feed(&mut hasher, cwd.to_str().unwrap_or("").as_bytes());
+            feed(&mut hasher, format!("{cwd_identity:?}").as_bytes());
             feed(&mut hasher, &timeout.as_nanos().to_le_bytes());
             for argument in argv {
                 feed(&mut hasher, argument.as_bytes());
@@ -989,6 +1583,9 @@ fn feed(hasher: &mut Sha256, bytes: &[u8]) {
 struct ProcessRunControl<'a> {
     max_output: usize,
     cancel: &'a CancellationToken,
+    workspace_root: &'a Path,
+    cwd_identity: DirectoryIdentity,
+    git_push: bool,
 }
 
 fn run_process(
@@ -1000,7 +1597,13 @@ fn run_process(
     git: bool,
     control: ProcessRunControl<'_>,
 ) -> Result<(OperationOutcome, Option<ExecutionOutput>, Option<i32>)> {
-    let ProcessRunControl { max_output, cancel } = control;
+    let ProcessRunControl {
+        max_output,
+        cancel,
+        workspace_root,
+        cwd_identity,
+        git_push,
+    } = control;
     if cancel.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
@@ -1009,18 +1612,60 @@ fn run_process(
     {
         return Err(ToolError::InvalidCommand);
     }
+    // GitAction must never be dispatched through an arbitrary approved
+    // interpreter/binary posing as Git. This filename check is intentionally
+    // narrow: it prevents an obvious confused-deputy invocation but is not a
+    // signature check or proof that a file named git is trustworthy.
+    if git && !git_executable_name(&executable) {
+        return Err(ToolError::InvalidCommand);
+    }
     if cancel.is_cancelled() {
         return Err(ToolError::Cancelled);
     }
+    // Pin the *directory object* originally approved, not only its pathname.
+    // Windows holds non-FILE_SHARE_DELETE handles for every ancestor through
+    // CreateProcess; Unix uses an O_NOFOLLOW fd in the child via fchdir.
+    let cwd_relative = cwd
+        .strip_prefix(workspace_root)
+        .map_err(|_| ToolError::ScopeEscape)?;
+    let pinned_cwd =
+        verified_open::pin_parent(workspace_root, &cwd_relative.join(".constellation-cwd-pin"))?;
+    if pinned_cwd.identity() != cwd_identity {
+        return Err(ToolError::ScopeEscape);
+    }
+    if cancel.is_cancelled() {
+        return Err(ToolError::Cancelled);
+    }
+    let git_executable_parent = if git {
+        Some(
+            executable
+                .parent()
+                .ok_or(ToolError::InvalidCommand)?
+                .to_path_buf(),
+        )
+    } else {
+        None
+    };
     let mut command = Command::new(executable);
     command
-        .current_dir(cwd)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env_clear();
-    if let Some(path) = std::env::var_os("PATH") {
+    // Windows needs pathname cwd, but its entire ancestor chain is pinned.
+    // Unix never consults a mutable cwd pathname when spawning the child.
+    #[cfg(windows)]
+    command.current_dir(cwd);
+    if git {
+        // Never pass the caller's PATH to Git: its subprocess helpers would
+        // otherwise be resolved through attacker-supplied ambient directories.
+        // Constrain helper lookup to the reviewed executable's own directory.
+        command.env(
+            "PATH",
+            git_executable_parent.ok_or(ToolError::InvalidCommand)?,
+        );
+    } else if let Some(path) = std::env::var_os("PATH") {
         command.env("PATH", path);
     }
     if cfg!(windows) {
@@ -1038,8 +1683,20 @@ fn run_process(
                 "GIT_CONFIG_GLOBAL",
                 if cfg!(windows) { "NUL" } else { "/dev/null" },
             )
-            .env("GIT_ALLOW_PROTOCOL", "https");
+            .env("GIT_ALLOW_PROTOCOL", if git_push { "https" } else { "" })
+            .env("GIT_NO_LAZY_FETCH", "1")
+            .env("GIT_OPTIONAL_LOCKS", "0")
+            .env("GIT_CONFIG_COUNT", "0")
+            .env("GCM_INTERACTIVE", "never");
     }
+    #[cfg(windows)]
+    let job = windows_process::ProcessJob::create()?;
+    #[cfg(windows)]
+    let mut child = job.spawn_suspended_then_assign(&mut command)?;
+    #[cfg(unix)]
+    let (mut child, mut process_group) =
+        unix_process::UnixProcessGroup::spawn(&mut command, &pinned_cwd)?;
+    #[cfg(not(any(windows, unix)))]
     let mut child = command.spawn()?;
     let stdout = child.stdout.take().ok_or(ToolError::InvalidCommand)?;
     let stderr = child.stderr.take().ok_or(ToolError::InvalidCommand)?;
@@ -1076,21 +1733,60 @@ fn run_process(
     let start = Instant::now();
     let (outcome, exit_code) = loop {
         if output_exceeded.load(Ordering::Acquire) {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_process(
+                &mut child,
+                #[cfg(windows)]
+                &job,
+                #[cfg(unix)]
+                &mut process_group,
+            )?;
             break (OperationOutcome::OutputLimit, None);
         }
         if cancel.is_cancelled() {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_process(
+                &mut child,
+                #[cfg(windows)]
+                &job,
+                #[cfg(unix)]
+                &mut process_group,
+            )?;
             break (OperationOutcome::Cancelled, None);
         }
         if start.elapsed() >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_process(
+                &mut child,
+                #[cfg(windows)]
+                &job,
+                #[cfg(unix)]
+                &mut process_group,
+            )?;
             break (OperationOutcome::TimedOut, None);
         }
-        if let Some(status) = child.try_wait()? {
+        #[cfg(unix)]
+        let parent_exited = process_group.parent_exited_without_reaping()?;
+        #[cfg(not(unix))]
+        let parent_exit_status = child.try_wait()?;
+        #[cfg(unix)]
+        if parent_exited {
+            // Holding the direct child as an unreaped zombie pins its PID,
+            // preventing another process group from reusing that PGID.
+            process_group.terminate()?;
+            let status = child.wait()?;
+            break (
+                if status.success() {
+                    OperationOutcome::Succeeded
+                } else {
+                    OperationOutcome::Failed
+                },
+                status.code(),
+            );
+        }
+        #[cfg(not(unix))]
+        if let Some(status) = parent_exit_status {
+            // A successfully exited direct child may leave grandchildren and
+            // inherited pipe writers alive; reap the entire Windows job.
+            #[cfg(windows)]
+            job.terminate()?;
             break (
                 if status.success() {
                     OperationOutcome::Succeeded
@@ -1132,14 +1828,44 @@ fn run_process(
     ))
 }
 
-#[cfg(not(windows))]
-fn replace_file(from: &Path, to: &Path) -> Result<()> {
-    fs::rename(from, to)?;
+fn git_executable_name(executable: &Path) -> bool {
+    let Some(name) = executable.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if cfg!(windows) {
+        name.eq_ignore_ascii_case("git.exe")
+    } else {
+        name == "git"
+    }
+}
+
+fn terminate_process(
+    child: &mut Child,
+    #[cfg(windows)] job: &windows_process::ProcessJob,
+    #[cfg(unix)] process_group: &mut unix_process::UnixProcessGroup,
+) -> Result<()> {
+    #[cfg(windows)]
+    {
+        if let Err(error) = job.terminate() {
+            // KILL_ON_JOB_CLOSE still applies on drop; best-effort direct kill
+            // is only fallback. Never return a successful cleanup receipt.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error.into());
+        }
+    }
+    #[cfg(unix)]
+    process_group.terminate()?;
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = child.kill();
+    }
+    child.wait()?;
     Ok(())
 }
 
 #[cfg(windows)]
-fn replace_file(from: &Path, to: &Path) -> Result<()> {
+pub(crate) fn replace_file(from: &Path, to: &Path) -> Result<()> {
     use std::{ffi::c_void, os::windows::ffi::OsStrExt};
     #[link(name = "kernel32")]
     unsafe extern "system" {

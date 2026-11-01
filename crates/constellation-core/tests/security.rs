@@ -1,7 +1,7 @@
 use constellation_core::{
     AgentId, ChatCompletionRequest, ChatEntry, ChatRole, CoreError, CredentialSource,
     OpenAiCompatibleAdapter, PermissionGate, PermissionScope, ProviderAdapter, ProviderId,
-    ProviderProfile, RoomId, StudioStore, TaskId, ToolAction,
+    ProviderKind, ProviderProfile, RoomId, StudioStore, TaskId, ToolAction,
 };
 
 fn scope(action: ToolAction) -> PermissionScope {
@@ -67,6 +67,7 @@ fn profile(endpoint: &str) -> ProviderProfile {
         display_name: "Custom".into(),
         model_id: "my-model".into(),
         base_url: endpoint.into(),
+        kind: ProviderKind::OpenaiChat,
         credentials: CredentialSource::Environment {
             variable: "CONSTELLATION_PROVIDER_API_KEY".into(),
         },
@@ -115,6 +116,7 @@ fn secure_endpoints_and_openai_compatible_request() {
     );
     assert_eq!(prepared.body["model"], "my-model");
     assert_eq!(prepared.body["messages"][0]["role"], "user");
+    assert_eq!(prepared.body["max_tokens"], 512);
     assert!(!format!("{prepared:?}").contains("Bearer"));
 }
 
@@ -137,4 +139,33 @@ fn provider_profiles_only_accept_credential_references_and_persist_them() {
     assert_eq!(store.snapshot().unwrap().providers, vec![profile]);
     let bytes = std::fs::read(&path).unwrap();
     assert!(!bytes.windows(4).any(|w| w == b"sk-"));
+}
+
+#[test]
+fn legacy_provider_protocol_is_stable_and_new_protocols_are_typed() {
+    let legacy = serde_json::json!({
+        "id": ProviderId::new(), "display_name": "Existing", "model_id": "old-model",
+        "base_url": "http://127.0.0.1:11434/v1",
+        "credentials": {"kind": "none"}
+    });
+    let old: ProviderProfile = serde_json::from_value(legacy).unwrap();
+    assert_eq!(old.kind, ProviderKind::OpenaiChat);
+    assert_eq!(serde_json::to_value(&old).unwrap()["kind"], "openai_chat");
+    let mut typed = serde_json::to_value(&old).unwrap();
+    for (name, kind) in [
+        ("openai_responses", ProviderKind::OpenaiResponses),
+        ("anthropic_messages", ProviderKind::AnthropicMessages),
+        ("google_gemini", ProviderKind::GoogleGemini),
+        ("ollama_native", ProviderKind::OllamaNative),
+        ("custom_compatible", ProviderKind::CustomCompatible),
+    ] {
+        typed["kind"] = serde_json::json!(name);
+        let parsed: ProviderProfile = serde_json::from_value(typed.clone()).unwrap();
+        assert_eq!(parsed.kind, kind);
+    }
+    typed["kind"] = serde_json::json!("other_made_up_vendor");
+    assert!(serde_json::from_value::<ProviderProfile>(typed).is_err());
+    let mut invalid = old;
+    invalid.kind = ProviderKind::AnthropicMessages;
+    assert!(OpenAiCompatibleAdapter::new(invalid).is_err());
 }

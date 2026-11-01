@@ -28,6 +28,10 @@ pub enum CoreError {
     PermissionDenied,
     #[error("store mutex was poisoned")]
     Poisoned,
+    #[error("unsupported SQLite user_version {0}; database was not migrated")]
+    UnsupportedSchemaVersion(i64),
+    #[error("unrecognized SQLite schema; database was not migrated")]
+    UnrecognizedSchema,
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;

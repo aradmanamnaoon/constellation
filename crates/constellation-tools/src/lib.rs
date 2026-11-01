@@ -16,10 +16,12 @@ use constellation_core::{AgentId, PermissionGate, PermissionScope, RoomId, TaskI
 use sha2::{Digest, Sha256};
 
 mod execution;
+mod verified_open;
 pub use execution::{
-    CancellationToken, ExecutionOutput, ExecutionReceipt, GitAction, LocalExecutor,
-    OperationApproval, OperationContext, OperationDetails, OperationOutcome, OperationPreview,
-    OperationRequest, PreparedOperation, ProcessOutput, WriteMode, WriteReceipt,
+    AuthenticatedJournalAnchor, AuthenticatedJournalHead, CancellationToken, ExecutionOutput,
+    ExecutionReceipt, GitAction, JournalOperationState, LocalExecutor, OperationApproval,
+    OperationContext, OperationDetails, OperationOutcome, OperationPreview, OperationRequest,
+    PreparedOperation, ProcessOutput, WriteMode, WriteReceipt,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -32,6 +34,8 @@ pub enum ToolError {
     ScopeEscape,
     #[error("symlink traversal is not allowed")]
     SymlinkDenied,
+    #[error("files with multiple hardlinks are not eligible for workspace read approval")]
+    HardlinkDenied,
     #[error("file access was not explicitly approved for this agent and task")]
     PermissionDenied,
     #[error("requested entry is not a regular file")]
@@ -50,10 +54,14 @@ pub enum ToolError {
     FileAlreadyExists,
     #[error("existing file changed since write approval")]
     ContentConflict,
+    #[error("file contents changed since read approval")]
+    ReadContentConflict,
     #[error("approval was not found or differs from the requested action")]
     ApprovalMismatch,
     #[error("operation ID was already approved or used")]
     OperationReplay,
+    #[error("execution journal is missing, corrupt, locked, or outside its allowed scope")]
+    InvalidJournal,
     #[error("operation was cancelled")]
     Cancelled,
     #[error("operation exceeded the deadline")]
@@ -127,7 +135,35 @@ impl WorkspaceReader {
         if !fs::metadata(&canonical)?.is_file() {
             return Err(ToolError::NotRegularFile);
         }
+        // A hardlink inside the workspace can alias an otherwise inaccessible
+        // file outside it without a symlink or reparse point. Reject aliases
+        // rather than treating a path prefix as proof of content ownership.
+        let relative = canonical
+            .strip_prefix(&self.root)
+            .map_err(|_| ToolError::ScopeEscape)?;
+        reject_hardlinks(&verified_open::read(&self.root, relative, &canonical)?)?;
         Ok(canonical)
+    }
+
+    /// Inspection after separately granted permission to inspect a target.
+    /// Bind the bytes to a handle opened beneath the trusted workspace.
+    pub(crate) fn read_candidate(&self, canonical: &Path) -> Result<Vec<u8>> {
+        let relative = canonical
+            .strip_prefix(&self.root)
+            .map_err(|_| ToolError::ScopeEscape)?;
+        let mut file = verified_open::read(&self.root, relative, canonical)?;
+        reject_hardlinks(&file)?;
+        if file.metadata()?.len() > self.max_bytes {
+            return Err(ToolError::FileTooLarge);
+        }
+        let mut bytes = Vec::new();
+        file.by_ref()
+            .take(self.max_bytes + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > self.max_bytes {
+            return Err(ToolError::FileTooLarge);
+        }
+        Ok(bytes)
     }
 
     /// Reads UTF-8 text only after matching the full exact-scope permission.
@@ -150,11 +186,16 @@ impl WorkspaceReader {
         };
         gate.authorize(&scope)
             .map_err(|_| ToolError::PermissionDenied)?;
-        let mut file = File::open(&canonical)?;
-        if !file.metadata()?.is_file() {
+        let relative = canonical
+            .strip_prefix(&self.root)
+            .map_err(|_| ToolError::ScopeEscape)?;
+        let mut file = verified_open::read(&self.root, relative, &canonical)?;
+        let opened_metadata = file.metadata()?;
+        if !opened_metadata.is_file() {
             return Err(ToolError::NotRegularFile);
         }
-        if file.metadata()?.len() > self.max_bytes {
+        reject_hardlinks(&file)?;
+        if opened_metadata.len() > self.max_bytes {
             return Err(ToolError::FileTooLarge);
         }
         let mut bytes = Vec::new();
@@ -173,6 +214,39 @@ impl WorkspaceReader {
             content,
         })
     }
+}
+
+// Desktop release targets all expose native link counts. On unsupported
+// targets reject rather than silently assuming a pathname has one owner.
+#[cfg(unix)]
+fn reject_hardlinks(file: &File) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    if file.metadata()?.nlink() != 1 {
+        return Err(ToolError::HardlinkDenied);
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn reject_hardlinks(file: &File) -> Result<()> {
+    use std::{mem::MaybeUninit, os::windows::io::AsRawHandle};
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    let mut info = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
+    if ok == 0 {
+        return Err(ToolError::Io(std::io::Error::last_os_error()));
+    }
+    if unsafe { info.assume_init() }.nNumberOfLinks != 1 {
+        return Err(ToolError::HardlinkDenied);
+    }
+    Ok(())
+}
+
+#[cfg(not(any(windows, unix)))]
+fn reject_hardlinks(_file: &File) -> Result<()> {
+    Err(ToolError::HardlinkDenied)
 }
 
 #[cfg(test)]
@@ -234,6 +308,61 @@ mod tests {
             Err(ToolError::NotRegularFile)
         ));
         assert!(reader.canonical_resource("nested/ok.txt").is_ok());
+    }
+
+    #[test]
+    fn hardlink_from_workspace_to_external_file_is_denied() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let external = outside.path().join("private-outside.txt");
+        fs::write(&external, "private outside content").unwrap();
+        fs::hard_link(&external, workspace.path().join("alias.txt")).unwrap();
+        let reader = WorkspaceReader::new(workspace.path(), 4096).unwrap();
+        assert!(matches!(
+            reader.canonical_resource("alias.txt"),
+            Err(ToolError::HardlinkDenied)
+        ));
+        assert_eq!(
+            fs::read_to_string(&external).unwrap(),
+            "private outside content"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn swapped_intermediate_directory_cannot_redirect_an_approved_read_outside_workspace() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        fs::create_dir(workspace.path().join("documents")).unwrap();
+        fs::write(workspace.path().join("documents/story.txt"), "approved").unwrap();
+        fs::write(outside.path().join("story.txt"), "external secret").unwrap();
+        let reader = WorkspaceReader::new(workspace.path(), 4096).unwrap();
+        let approved = reader.canonical_resource("documents/story.txt").unwrap();
+
+        // The checked path has already been approved for its original bytes.
+        // A different process now swaps its parent directory to a symlink.
+        fs::rename(
+            workspace.path().join("documents"),
+            workspace.path().join("original"),
+        )
+        .unwrap();
+        symlink(outside.path(), workspace.path().join("documents")).unwrap();
+
+        let result = reader.read_candidate(&approved);
+        assert!(
+            result.is_err(),
+            "an approved file handle followed a replaced directory"
+        );
+        assert_eq!(
+            fs::read_to_string(outside.path().join("story.txt")).unwrap(),
+            "external secret"
+        );
+        assert_eq!(
+            fs::read_to_string(workspace.path().join("original/story.txt")).unwrap(),
+            "approved"
+        );
     }
 
     #[test]

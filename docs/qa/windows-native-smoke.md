@@ -1,5 +1,75 @@
 # Windows native smoke verification — 2026-10-30
 
+## New Evidence and encrypted recovery controls — installed Windows verification
+
+An experimental NSIS installer was rebuilt from the **modified, uncommitted**
+Constellation source tree with the native Evidence and backup/recovery commands
+integrated. The baseline Git HEAD was
+`1dfe1c47900dff674420152292d97e965dd04614`, but the build contains
+uncommitted changes: **this is not an immutable, reproducible commit-based
+release**. The unsigned package was installed into the separate
+`qa-installed-evidence-backup-20261030` directory without uninstalling or
+overwriting the user's existing installation.
+
+| Gate | Observed result, 2026-10-30 |
+| --- | --- |
+| Frontend | `pnpm run check` 0 errors, 0 warnings; `pnpm run build` exit 0 |
+| Native backend | `cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --offline --lib`: 19 tests pass, including committed WAL backup, wrong-password rejection, no-clobber restore; clippy `-D warnings` exit 0 |
+| Installer build | `CARGO_NET_OFFLINE=true pnpm tauri build --bundles nsis`, exit 0; actual NSIS 3,129,234 bytes, SHA-256 `a9bf90466a650571d588a5ed10f8872a7146f62a28e3f75f01e54b979e3dfee1` |
+| QA installation | NSIS silent install exit 0 to new `qa-installed-evidence-backup-20261030`; installed `constellation-desktop.exe` 8,505,344 bytes, SHA-256 `3757c726b6003ae06608fb6d50675775eb8a74a77f3a0b9452b9aa5f37b5595d` |
+| Signature | Installer and installed executable both Windows Authenticode `NotSigned` |
+| Real installed GUI | Windows WebView2 UI Automation observed `Constellation` main window with 142 descendants, including Rooms, Tasks, Evidence, Library, Settings; test app launched minimized and was stopped afterward |
+| Evidence navigation and search | UIA invoked Evidence; used `ValuePattern` to enter `In neuroscience, the neuron fires when a voltage threshold is crossed. A synapse transmits signals.` and query `threshold`; UIA invoked enabled `Find passages`; result displayed **1 matching passage**, original full text as an exact quote, byte range `[0, 99)`, virtual source label `pasted-document.md` and SHA-256 `8f581caee6c80774ed1a5632ce498618fb7dd95713345a91fa160221025322a8` |
+| Recovery settings | UIA invoked Settings and expanded `Advanced Studio` with `ExpandCollapsePattern`; observed `Create encrypted backup` and `Verify and recover to a new file` buttons, passphrase fields and path field. No backup or restore performed on the pre-existing user workspace during this GUI inspection |
+
+This is **one Windows x64, unsigned, local QA build**. The installed UI
+interaction confirms navigation and a source-grounded search through the native
+bridge. Backup cryptography and SQLite restore were exercised by native Rust
+tests; complete installed backup creation/import, independent Windows OS sandbox
+review, alternate operating systems, Android, real paid providers, 200 exercised
+skills/MCP integrations, remote runner and cloud sync remain open. A local UIA
+test cannot establish these other gates.
+
+## Installed delayed-response cancellation acceptance — independent test
+
+An additional narrow Unicode smoke used the same installed Windows UIA
+process (2820). With the real Tasks modal, the automation inserted
+`طرح پژوهش: خلاصه‌ای از داده‌ها بنویسید، اما هیچ ابزاری اجرا نکنید.`
+into the Instructions edit field, invoked Save pending task, and found the
+identical Persian text in the native accessibility tree alongside a Pending
+status. This confirms a Unicode task roundtrip in that installed build;
+it does **not** establish full right-to-left layout, keyboard IME composition,
+Persian punctuation, screen-reader pronunciation or cross-platform behavior.
+
+A separate isolated install was tested with an HTTP fixture that intentionally
+delays its response by six seconds. This tests what the *installed UI actually
+does* when cancelling a pending model reply, and is not a live-AI test.
+
+| Gate | Direct observation |
+| --- | --- |
+| Installer | Unsigned NSIS `Constellation_0.1.0_x64-setup.exe`; 2,989,408 bytes, SHA-256 `33d69e8ed3b174396d34174459501bee024f007d2e6cc37fc94c3de72cc2da14` |
+| Isolated QA install | `qa-installed-cancel`; installer returned exit 0 |
+| Installed application | `constellation-desktop.exe`; 8,109,568 bytes; SHA-256 `2b663ca9bcb13146b4251a9e16df8edff4b090ac42c33d10cecb0d179c28c0a2` |
+| Windows UI automation | Real installed WebView2 process 2820, HWND 8129550, title `Constellation` |
+| Provider configuration | UIA created `Delayed cancellation fixture` with loopback `http://127.0.0.1:18768/v1`; provider visible in Settings |
+| Task setup | UIA entered and saved `DELAYED FIXTURE cancellation should not persist this model reply.`; selected delayed provider in Tasks |
+| Cancellation | UIA clicked `Run text task` then `Cancel task` roughly 350 milliseconds later; task displayed `Cancelled` |
+| Late-response protection | After waiting beyond the 6-second fixture delay, Rooms did **not** show `[DELAYED FIXTURE ONLY] Cancellation regression response.`; previously stored unrelated mock replies were retained |
+
+Source-controlled fixture: `tests/fixtures/mock-openai-delayed.mjs`. The
+fixture never executes tools or AI, and never logs prompt content or secrets.
+The newer separately documented source-identified package at commit
+`c878520` was built and installed after this pass; therefore its exact
+binary identity is **not** the same as the test binary above. Its own record
+reports launch/smoke verification, not an independent delayed-cancellation
+run. Repeating the cancellation test against each immutable release
+candidate remains an acceptance requirement.
+
+Cancellation discards the local response but cannot guarantee that a remote
+provider halted computation or billing. This pass does not verify OS sandbox
+isolation, process-tree termination, cross-platform operation, or live-model
+compatibility.
+
 ## Latest Windows text-task hardening package — fixed source identity
 
 After the installed text-task smoke recorded below, a targeted native backend

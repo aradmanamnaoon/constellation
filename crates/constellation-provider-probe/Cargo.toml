@@ -1,0 +1,17 @@
+[package]
+name = "constellation-provider-probe"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Explicit, bounded compatibility probes for OpenAI-style chat completion endpoints"
+license = "MIT"
+publish = false
+
+[dependencies]
+reqwest = { version = "=0.12.28", default-features = false, features = ["json", "rustls-tls"] }
+serde_json = "1"
+tokio = { version = "=1.54.1", features = ["net", "time", "rt", "io-util"] }
+url = "2.5"
+
+[dev-dependencies]
+tokio = { version = "=1.54.1", features = ["rt", "net", "io-util", "time"] }

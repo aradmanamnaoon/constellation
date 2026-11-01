@@ -1,0 +1,17 @@
+[package]
+name = "constellation-credential-vault"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Opt-in, fail-closed OS secure credential storage for Constellation providers"
+
+[dependencies]
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+zeroize = "1.9"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native"] }

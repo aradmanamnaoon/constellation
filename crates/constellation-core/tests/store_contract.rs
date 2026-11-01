@@ -1,6 +1,6 @@
 use constellation_core::{
-    AgentId, CoreError, EventKind, MessageId, MessageSender, OperationId, RoomId, StudioStore,
-    TaskId, TaskState,
+    AgentId, CoreError, CredentialSource, EventKind, MessageId, MessageSender, OperationId,
+    ProviderId, ProviderKind, ProviderProfile, RoomId, StudioStore, TaskId, TaskState,
 };
 
 fn store() -> (tempfile::TempDir, StudioStore) {
@@ -8,6 +8,57 @@ fn store() -> (tempfile::TempDir, StudioStore) {
     let database = temp.path().join("config").join("studio.sqlite");
     let store = StudioStore::open(database).expect("open");
     (temp, store)
+}
+
+#[test]
+fn agent_provider_preference_is_durable_validated_and_idempotent() {
+    let (dir, db) = store();
+    let agent = db.add_agent("Researcher", "Scout").unwrap();
+    assert_eq!(agent.provider_id, None);
+    let nonexistent = ProviderId::new();
+    let before = db.events().unwrap().len();
+    assert!(matches!(
+        db.set_agent_provider(agent.id, Some(nonexistent), OperationId::new()),
+        Err(CoreError::NotFound("provider"))
+    ));
+    assert_eq!(db.events().unwrap().len(), before);
+    let provider_id = ProviderId::new();
+    db.save_provider_profile(ProviderProfile {
+        id: provider_id,
+        display_name: "Private local".into(),
+        model_id: "test".into(),
+        base_url: "http://127.0.0.1:18767/v1".into(),
+        kind: ProviderKind::OpenaiChat,
+        credentials: CredentialSource::None,
+    })
+    .unwrap();
+    let op = OperationId::new();
+    let assigned = db
+        .set_agent_provider(agent.id, Some(provider_id), op)
+        .unwrap();
+    assert_eq!(assigned.provider_id, Some(provider_id));
+    assert_eq!(
+        db.set_agent_provider(agent.id, Some(provider_id), op)
+            .unwrap(),
+        assigned
+    );
+    assert!(matches!(
+        db.set_agent_provider(agent.id, None, op),
+        Err(CoreError::OperationConflict)
+    ));
+    assert!(matches!(db.events().unwrap().last().unwrap().kind,
+        EventKind::AgentProviderChanged { agent_id, provider_id: Some(id) }
+        if agent_id == agent.id && id == provider_id));
+    drop(db);
+    let reopened = StudioStore::open(dir.path().join("config/studio.sqlite")).unwrap();
+    assert_eq!(
+        reopened.snapshot().unwrap().agents[0].provider_id,
+        Some(provider_id)
+    );
+    let cleared = reopened
+        .set_agent_provider(agent.id, None, OperationId::new())
+        .unwrap();
+    assert_eq!(cleared.provider_id, None);
 }
 
 #[test]

@@ -60,10 +60,6 @@ const header = (data) => {
 };
 const observedOn = manifest.observed_on;
 const sourceFiles = walk(sourceRoot);
-const reviewedBase = new Set(
-  manifest.entries.filter((entry) => entry.kind === 'skill' && entry.status === 'source_reviewed')
-    .map((entry) => entry.id),
-);
 
 for (const entry of manifest.entries.filter((item) => item.kind === 'cli')) keep(entry);
 for (const file of sourceFiles) {
@@ -75,7 +71,10 @@ for (const file of sourceFiles) {
     throw new Error('Unexpected sibling skill metadata or safeguards: ' + file);
   }
   const id = 'skill:' + front.name;
-  if (saved.has(id) && reviewedBase.has(id)) {
+  // Keep previously vetted installations and their source/revision/receipt
+  // identities. Regeneration must never downgrade a counted audit result or
+  // replace its installed source path with the sibling candidate path.
+  if (saved.has(id)) {
     keep(saved.get(id));
   } else {
     keep({
@@ -173,7 +172,7 @@ if (process.argv.includes('--check')) {
   process.stdout.write('Recorded ' + skills.length + ' unique skill files with hashes: '
     + skills.filter((entry) => entry.status === 'source_reviewed').length + ' source reviewed; '
     + skills.filter((entry) => entry.status === 'installed_unvetted').length + ' installed unvetted; '
-    + '0 newly validated as Constellation integrations.\n');
+    + 'existing installed_vetted records are preserved and must still pass --verify-local.\n');
 } else {
   process.stderr.write('Usage: node skills-manifest/refresh-observed-skills.mjs --check|--write\n');
   process.exitCode = 2;

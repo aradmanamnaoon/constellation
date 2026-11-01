@@ -159,10 +159,16 @@ fn read_is_bound_to_approval_and_revocation_is_checked_again_at_dispatch() {
     grant(&mut gate, &operation);
     let approval = tool.approve(&gate, OperationId::new(), &operation).unwrap();
     assert!(gate.revoke(operation.scope()));
-    assert!(matches!(
-        tool.execute(&gate, &approval, operation, &CancellationToken::new()),
-        Err(ToolError::PermissionDenied)
-    ));
+    let (denied, output) = tool
+        .execute(&gate, &approval, operation, &CancellationToken::new())
+        .unwrap();
+    assert_eq!(denied.outcome, OperationOutcome::Failed);
+    assert_eq!(
+        denied.failure_reason.as_deref(),
+        Some("file access was not explicitly approved for this agent and task")
+    );
+    assert!(output.is_none());
+    assert_eq!(tool.receipt(approval.operation_id), Some(denied));
     let operation = tool
         .prepare(
             context,
@@ -172,6 +178,19 @@ fn read_is_bound_to_approval_and_revocation_is_checked_again_at_dispatch() {
         )
         .unwrap();
     grant(&mut gate, &operation);
+    assert!(matches!(
+        tool.execute(&gate, &approval, operation, &CancellationToken::new()),
+        Err(ToolError::OperationReplay)
+    ));
+    let operation = tool
+        .prepare(
+            context,
+            OperationRequest::Read {
+                path: "paper.txt".into(),
+            },
+        )
+        .unwrap();
+    let approval = tool.approve(&gate, OperationId::new(), &operation).unwrap();
     let (receipt, output) = tool
         .execute(&gate, &approval, operation, &CancellationToken::new())
         .unwrap();
@@ -180,6 +199,142 @@ fn read_is_bound_to_approval_and_revocation_is_checked_again_at_dispatch() {
         panic!("read result")
     };
     assert_eq!(content.content, "study notes");
+}
+
+#[test]
+fn revoked_dispatch_is_finalized_in_authenticated_journal_and_regrant_needs_new_approval() {
+    let workspace = tempfile::tempdir().unwrap();
+    let private = tempfile::tempdir().unwrap();
+    let journal = private.path().join("revoked-attempts.jsonl");
+    let key = [0x43; 32];
+    let principal = context();
+    let operation_id = OperationId::new();
+    let request = || OperationRequest::Write {
+        path: "must-not-exist.txt".into(),
+        bytes: b"authorized only by a fresh approval".to_vec(),
+        mode: WriteMode::CreateNew,
+    };
+    let target = workspace.path().join("must-not-exist.txt");
+    let mut gate = PermissionGate::new();
+
+    let (stale_approval, denied_receipt) = {
+        let tool = LocalExecutor::with_authenticated_journal(
+            workspace.path(),
+            16_384,
+            16_384,
+            &journal,
+            key,
+        )
+        .unwrap();
+        let prepared = tool.prepare(principal, request()).unwrap();
+        grant(&mut gate, &prepared);
+        let approval = tool.approve(&gate, operation_id, &prepared).unwrap();
+        assert!(gate.revoke(prepared.scope()));
+
+        let (receipt, output) = tool
+            .execute(&gate, &approval, prepared, &CancellationToken::new())
+            .unwrap();
+        assert_eq!(receipt.outcome, OperationOutcome::Failed);
+        assert_eq!(
+            receipt.failure_reason.as_deref(),
+            Some("file access was not explicitly approved for this agent and task")
+        );
+        assert_eq!(receipt.operation_id, operation_id);
+        assert!(receipt.output_sha256.is_none());
+        assert!(output.is_none());
+        assert!(!target.exists(), "revocation must prevent the file write");
+        assert_eq!(tool.receipt(operation_id), Some(receipt.clone()));
+        assert_eq!(fs::read_to_string(&journal).unwrap().lines().count(), 3);
+        (approval, receipt)
+    };
+
+    // A new executor loads the authenticated receipt after the journal owner
+    // exits. Regranting the *same* scope must not restore the old approval.
+    let tool =
+        LocalExecutor::with_authenticated_journal(workspace.path(), 16_384, 16_384, &journal, key)
+            .unwrap();
+    assert_eq!(tool.receipt(operation_id), Some(denied_receipt));
+    let prepared = tool.prepare(principal, request()).unwrap();
+    assert_eq!(prepared.digest(), stale_approval.digest);
+    grant(&mut gate, &prepared);
+    assert!(matches!(
+        tool.execute(&gate, &stale_approval, prepared, &CancellationToken::new()),
+        Err(ToolError::OperationReplay)
+    ));
+    assert!(!target.exists());
+
+    let prepared = tool.prepare(principal, request()).unwrap();
+    assert!(matches!(
+        tool.approve(&gate, operation_id, &prepared),
+        Err(ToolError::OperationReplay)
+    ));
+    let fresh = tool.approve(&gate, OperationId::new(), &prepared).unwrap();
+    let (receipt, output) = tool
+        .execute(&gate, &fresh, prepared, &CancellationToken::new())
+        .unwrap();
+    assert_eq!(receipt.outcome, OperationOutcome::Succeeded);
+    assert!(matches!(output, Some(ExecutionOutput::Write(_))));
+    assert_eq!(
+        fs::read(&target).unwrap(),
+        b"authorized only by a fresh approval"
+    );
+    assert_eq!(fs::read_to_string(&journal).unwrap().lines().count(), 6);
+}
+
+#[test]
+fn read_rejects_same_length_content_swap_after_review_without_exposing_bytes() {
+    let workspace = tempfile::tempdir().unwrap();
+    let file = workspace.path().join("notes.txt");
+    fs::write(&file, b"approved text").unwrap();
+    let tool = runner(workspace.path());
+    let context = context();
+    let pending = tool
+        .prepare(
+            context,
+            OperationRequest::Read {
+                path: "notes.txt".into(),
+            },
+        )
+        .unwrap();
+    let original_preview = pending.preview();
+    let OperationDetails::Read {
+        sha256: reviewed_sha,
+        bytes,
+        ..
+    } = original_preview.details
+    else {
+        panic!("expected read preview");
+    };
+    assert_eq!(bytes, b"approved text".len());
+    assert_eq!(reviewed_sha.len(), 64);
+
+    let mut gate = PermissionGate::new();
+    grant(&mut gate, &pending);
+    let approval = tool.approve(&gate, OperationId::new(), &pending).unwrap();
+    fs::write(&file, b"replaced text").unwrap();
+    let replacement = tool
+        .prepare(
+            context,
+            OperationRequest::Read {
+                path: "notes.txt".into(),
+            },
+        )
+        .unwrap();
+    assert_ne!(pending.digest(), replacement.digest());
+    let (receipt, output) = tool
+        .execute(&gate, &approval, pending, &CancellationToken::new())
+        .unwrap();
+    assert_eq!(receipt.outcome, OperationOutcome::Failed);
+    assert_eq!(
+        receipt.failure_reason.as_deref(),
+        Some("file contents changed since read approval")
+    );
+    assert!(output.is_none());
+    assert_eq!(tool.receipt(approval.operation_id), Some(receipt));
+    assert!(matches!(
+        tool.execute(&gate, &approval, replacement, &CancellationToken::new()),
+        Err(ToolError::ApprovalMismatch)
+    ));
 }
 
 #[test]
@@ -316,6 +471,12 @@ fn rejected_paths_and_wrong_principal_have_no_effect() {
         Err(ToolError::PermissionDenied)
     ));
     assert!(!dir.path().join("only-me.txt").exists());
+    // An unrelated principal cannot consume another principal's approval.
+    let (receipt, _) = tool
+        .execute(&gate, &approval, prepared, &CancellationToken::new())
+        .unwrap();
+    assert_eq!(receipt.outcome, OperationOutcome::Succeeded);
+    assert_eq!(fs::read(dir.path().join("only-me.txt")).unwrap(), b"x");
 }
 
 #[test]
@@ -362,7 +523,7 @@ fn approved_process_uses_absolute_executable_and_captures_output() {
         .unwrap();
     assert!(matches!(
         tool.execute(&gate, &approval, different_args, &CancellationToken::new()),
-        Err(ToolError::ApprovalMismatch)
+        Err(ToolError::PermissionDenied)
     ));
 }
 

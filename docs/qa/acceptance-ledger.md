@@ -1,10 +1,14 @@
-# Constellation release acceptance ledger
+# Constellation — platform acceptance ledger
 
-The currently authoritative initial master gate inventory is maintained at
+The authoritative, editable **188-row acceptance inventory** is maintained in
 [`docs/quality/acceptance-ledger.md`](../quality/acceptance-ledger.md).
 
-This file is intentionally a **pointer**, not a duplicate ledger that could
-silently diverge. Narrow observed Windows results are recorded separately in
-[`windows-native-smoke.md`](windows-native-smoke.md). The requested full
-desktop/mobile/security/release checks remain open until tested against a
-specific reproducible build and platform.
+This entrypoint exists because the original specification calls for the ledger
+under `docs/qa/`. To avoid two divergent sets of PASS/FAIL states, there is
+only **one** ledger: the linked file above. It begins with `UNVERIFIED` rows;
+individual tests, source inspections, mocks, uninstalled GUI binaries and
+unsigned packages do not automatically advance an entire platform requirement.
+
+For specific source-pinned evidence, see
+[`docs/qa/`](./) and the
+[`23-workstream delivery board`](../mission/active-task-plan.md).
