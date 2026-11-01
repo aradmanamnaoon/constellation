@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import {
   EXPECTED_CRATES,
+  REQUIRED_ANDROID_FILES,
   REQUIRED_FILES,
   inspectSourceManifest,
 } from '../.github/workflows/source-gate.mjs';
@@ -18,8 +19,26 @@ const fixture = (overrides = {}) => inspectSourceManifest({
 
 test('complete deterministic expected crate inventory and baseline', () => {
   assert.equal(EXPECTED_CRATES.length, 14);
+  assert.equal(REQUIRED_ANDROID_FILES.length, 15);
   assert.equal(new Set(EXPECTED_CRATES).size, EXPECTED_CRATES.length);
+  assert.equal(new Set(REQUIRED_ANDROID_FILES).size, REQUIRED_ANDROID_FILES.length);
   assert.equal(fixture().ok, true);
+});
+
+test('Android Gradle wrapper, manifest, activity and native build sources must all be committed', () => {
+  for (const required of [
+    'apps/desktop/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar',
+    'apps/desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml',
+    'apps/desktop/src-tauri/gen/android/app/src/main/java/app/constellation/studio/MainActivity.kt',
+    'apps/desktop/src-tauri/gen/android/buildSrc/build.gradle.kts',
+  ]) {
+    assert(REQUIRED_ANDROID_FILES.includes(required));
+    const notCommitted = new Set(standard);
+    notCommitted.delete(required);
+    assert(fixture({ tracked: notCommitted }).errors.includes(`UNTRACKED_REQUIRED:${required}`));
+  }
+  const injected = 'apps/desktop/src-tauri/gen/android/app/src/main/java/app/constellation/studio/Unreviewed.kt';
+  assert(fixture({ sources: new Set([injected]) }).errors.includes(`UNTRACKED_SOURCE:${injected}`));
 });
 
 test('missing source, untracked manifest and absent lock fail individually', () => {
@@ -46,6 +65,12 @@ test('untracked new source, new crate without lock and forbidden tracked binarie
   const key = new Set([...standard, 'secrets/private.key']);
   assert(fixture({ tracked: key, actual: key })
     .errors.includes('FORBIDDEN_TRACKED:secrets/private.key'));
+  for (const secret of ['local.properties', 'key.properties', 'keystore.properties']) {
+    const file = `apps/desktop/src-tauri/gen/android/${secret}`;
+    const trackedSecrets = new Set([...standard, file]);
+    assert(fixture({ tracked: trackedSecrets, actual: trackedSecrets })
+      .errors.includes(`FORBIDDEN_TRACKED:${file}`));
+  }
 });
 
 test('fail closed on an empty index and missing tracked object', () => {

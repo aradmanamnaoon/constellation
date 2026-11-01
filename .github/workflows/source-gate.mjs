@@ -16,7 +16,28 @@ export const EXPECTED_CRATES = Object.freeze([
   'constellation-tools', 'constellation-workflows',
 ]);
 
+// These are build inputs, not generated APKs. Android packaging must never
+// succeed from an untracked local Studio/Gradle project absent from GitHub.
+export const REQUIRED_ANDROID_FILES = Object.freeze([
+  'apps/desktop/src-tauri/gen/android/.gitignore',
+  'apps/desktop/src-tauri/gen/android/build.gradle.kts',
+  'apps/desktop/src-tauri/gen/android/settings.gradle',
+  'apps/desktop/src-tauri/gen/android/gradle.properties',
+  'apps/desktop/src-tauri/gen/android/gradlew',
+  'apps/desktop/src-tauri/gen/android/gradlew.bat',
+  'apps/desktop/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar',
+  'apps/desktop/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties',
+  'apps/desktop/src-tauri/gen/android/buildSrc/build.gradle.kts',
+  'apps/desktop/src-tauri/gen/android/buildSrc/src/main/java/app/constellation/studio/kotlin/BuildTask.kt',
+  'apps/desktop/src-tauri/gen/android/buildSrc/src/main/java/app/constellation/studio/kotlin/RustPlugin.kt',
+  'apps/desktop/src-tauri/gen/android/app/build.gradle.kts',
+  'apps/desktop/src-tauri/gen/android/app/src/main/AndroidManifest.xml',
+  'apps/desktop/src-tauri/gen/android/app/src/main/java/app/constellation/studio/MainActivity.kt',
+  'apps/desktop/src-tauri/gen/android/app/src/main/res/xml/file_paths.xml',
+]);
+
 export const REQUIRED_FILES = Object.freeze([
+  ...REQUIRED_ANDROID_FILES,
   ...EXPECTED_CRATES.flatMap((name) => [
     `crates/${name}/Cargo.toml`, `crates/${name}/Cargo.lock`,
     `crates/${name}/src/lib.rs`,
@@ -39,10 +60,12 @@ export const REQUIRED_FILES = Object.freeze([
 
 // Skill qualification receipts are local evidence, not distributable source.
 // Explicit configuration JSON is covered by REQUIRED_FILES instead.
-const ALLOWED_SOURCE_EXT = /\.(?:rs|svelte|css|ts|js|mjs|ps1|sh|toml|yml|yaml)$/i;
-const FORBIDDEN_TRACKED = /(^|\/)(?:target|node_modules|\.svelte-kit|\.git|\.env(?:\..*)?|__pycache__|dist)(?:\/|$)|\.(?:pem|p12|pfx|keystore|jks|key|exe|dll|dmg|appimage|apk|msi)$/i;
+const ALLOWED_SOURCE_EXT = /\.(?:rs|svelte|css|ts|js|mjs|ps1|sh|toml|yml|yaml|kt|kts|xml|gradle)$/i;
+const FORBIDDEN_TRACKED = /(^|\/)(?:target|node_modules|\.svelte-kit|\.git|\.env(?:\..*)?|__pycache__|dist|local\.properties|key\.properties|keystore\.properties)(?:\/|$)|\.(?:pem|p12|pfx|keystore|jks|key|exe|dll|dmg|appimage|apk|msi)$/i;
 const BASE_SOURCE_DIRS = Object.freeze([
   '.github/workflows', 'apps/desktop/src', 'apps/desktop/src-tauri/src',
+  'apps/desktop/src-tauri/gen/android/app/src/main',
+  'apps/desktop/src-tauri/gen/android/buildSrc/src/main',
   'catalog', 'crates', 'skills-manifest', 'tests',
 ]);
 const IGNORED_DIRS = new Set([
