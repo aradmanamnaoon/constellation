@@ -4219,6 +4219,33 @@ fn studio_approve_local_file_operation(
     result
 }
 
+/// An expected startup error (e.g. an unsupported local SQLite schema) must
+/// not be converted into an unhandled Rust panic. In an optimized Windows
+/// release, panic=abort previously appeared as an unhelpful 0xC0000409 crash.
+#[cfg(windows)]
+fn report_launch_error() {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(
+            hwnd: *mut std::ffi::c_void,
+            text: *const u16,
+            caption: *const u16,
+            kind: u32,
+        ) -> i32;
+    }
+    let message: Vec<u16> = "Constellation could not start its local workspace.\n\
+        Your files have not been deleted. Keep your application data and report \
+        this error before attempting any reset or reinstall.\0"
+        .encode_utf16()
+        .collect();
+    let title: Vec<u16> = "Constellation — startup error\0".encode_utf16().collect();
+    // MB_OK | MB_ICONERROR. This is intentionally an OS-native error dialog,
+    // not a renderer-dependent view that may not exist on a failed startup.
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), message.as_ptr(), title.as_ptr(), 0x10);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -4314,7 +4341,12 @@ pub fn run() {
             studio_cancel_task,
         ])
         .run(tauri::generate_context!())
-        .expect("unable to run Constellation desktop application");
+        .unwrap_or_else(|error| {
+            eprintln!("Constellation startup failed: {error}");
+            #[cfg(windows)]
+            report_launch_error();
+            std::process::exit(1);
+        });
 }
 
 #[cfg(test)]

@@ -56,6 +56,43 @@ const STORE_SCHEMA_DDL: &str = "CREATE TABLE IF NOT EXISTS rooms (
          );
          CREATE INDEX IF NOT EXISTS messages_room_index ON messages(room_id);";
 
+/// Exact six-table DDL shipped by the original unversioned desktop build
+/// (b229c5f). SQLite retains indentation in sqlite_master.sql, so comparing
+/// only the newer DDL falsely rejects an otherwise valid existing profile.
+/// Do not replace this explicit allowlist with permissive SQL normalization:
+/// unknown tables, changed constraints and triggers must still fail closed.
+const STORE_LEGACY_SCHEMA_DDL: &str = "PRAGMA foreign_keys = ON;
+             CREATE TABLE IF NOT EXISTS rooms (
+                 id TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS agents (
+                 id TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS messages (
+                 id TEXT PRIMARY KEY NOT NULL, room_id TEXT NOT NULL,
+                 data TEXT NOT NULL,
+                 FOREIGN KEY(room_id) REFERENCES rooms(id)
+             );
+             CREATE TABLE IF NOT EXISTS tasks (
+                 id TEXT PRIMARY KEY NOT NULL,
+                 room_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+                 data TEXT NOT NULL,
+                 FOREIGN KEY(room_id) REFERENCES rooms(id),
+                 FOREIGN KEY(agent_id) REFERENCES agents(id)
+             );
+             CREATE TABLE IF NOT EXISTS providers (
+                 id TEXT PRIMARY KEY NOT NULL, data TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS events (
+                 sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                 operation_id TEXT UNIQUE NOT NULL,
+                 fingerprint TEXT NOT NULL,
+                 occurred_at_ms INTEGER NOT NULL,
+                 kind TEXT NOT NULL,
+                 result TEXT NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS messages_room_index ON messages(room_id);";
+
 /// The native host has historically reserved billable model-proposal attempts
 /// in the *same* StudioStore SQLite file. Those two tables are a known,
 /// optional extension, not a foreign database. Share the exact DDL with the
@@ -103,9 +140,9 @@ fn known_schema() -> Result<SchemaObjects> {
     schema_objects(&reference)
 }
 
-fn known_schema_with_extensions(budgets: bool, evidence: bool) -> Result<SchemaObjects> {
+fn known_schema_with_extensions(ddl: &str, budgets: bool, evidence: bool) -> Result<SchemaObjects> {
     let reference = Connection::open_in_memory()?;
-    reference.execute_batch(STORE_SCHEMA_DDL)?;
+    reference.execute_batch(ddl)?;
     if budgets {
         reference.execute_batch(PROPOSAL_BUDGET_DDL)?;
     }
@@ -133,9 +170,13 @@ fn schema_state(conn: &Connection) -> Result<bool> {
         return Ok(true); // Fresh database; create known schema atomically.
     }
     if present == known_schema()?
-        || present == known_schema_with_extensions(true, false)?
-        || present == known_schema_with_extensions(false, true)?
-        || present == known_schema_with_extensions(true, true)?
+        || present == known_schema_with_extensions(STORE_SCHEMA_DDL, true, false)?
+        || present == known_schema_with_extensions(STORE_SCHEMA_DDL, false, true)?
+        || present == known_schema_with_extensions(STORE_SCHEMA_DDL, true, true)?
+        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, false, false)?
+        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, true, false)?
+        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, false, true)?
+        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, true, true)?
     {
         return Ok(version == 0); // Exact unversioned layout: version-only migration.
     }
@@ -857,4 +898,92 @@ fn record_event<T: Serialize>(
         ],
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod historical_schema_startup_tests {
+    use super::*;
+
+    #[test]
+    fn shipped_unversioned_profile_migrates_without_rewriting_schema_or_data() {
+        for budget in [false, true] {
+            for evidence in [false, true] {
+                let directory = tempfile::tempdir().unwrap();
+                let path = directory.path().join("constellation.sqlite3");
+                let original = Connection::open(&path).unwrap();
+                original.execute_batch(STORE_LEGACY_SCHEMA_DDL).unwrap();
+                if budget {
+                    original.execute_batch(PROPOSAL_BUDGET_DDL).unwrap();
+                }
+                if evidence {
+                    original.execute_batch(EVIDENCE_LIBRARY_DDL).unwrap();
+                }
+                original
+                    .execute(
+                        "INSERT INTO rooms(id, data) VALUES (?1, ?2)",
+                        ["existing-room", "preexisting-data-must-survive"],
+                    )
+                    .unwrap();
+                let before = schema_objects(&original).unwrap();
+                assert_eq!(
+                    original
+                        .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                        .unwrap(),
+                    0
+                );
+                drop(original);
+
+                let store = StudioStore::open(&path).unwrap();
+                drop(store);
+                let migrated = Connection::open(&path).unwrap();
+                assert_eq!(
+                    migrated
+                        .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                        .unwrap(),
+                    1
+                );
+                assert_eq!(schema_objects(&migrated).unwrap(), before);
+                let kept: String = migrated
+                    .query_row("SELECT data FROM rooms WHERE id='existing-room'", [], |r| {
+                        r.get(0)
+                    })
+                    .unwrap();
+                assert_eq!(kept, "preexisting-data-must-survive");
+                verify_initialized_schema(&migrated).unwrap();
+                drop(migrated);
+                // Opening the already-versioned *legacy layout* must continue
+                // working on every subsequent launch, not just migration.
+                StudioStore::open(&path).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_profile_with_changed_table_or_extra_trigger_is_still_rejected_without_writes() {
+        for sql in [
+            "ALTER TABLE rooms ADD COLUMN unauthorized TEXT;",
+            "CREATE TRIGGER unauthorized AFTER INSERT ON rooms BEGIN SELECT 1; END;",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("constellation.sqlite3");
+            let original = Connection::open(&path).unwrap();
+            original.execute_batch(STORE_LEGACY_SCHEMA_DDL).unwrap();
+            original.execute_batch(sql).unwrap();
+            let before = schema_objects(&original).unwrap();
+            drop(original);
+
+            assert!(matches!(
+                StudioStore::open(&path),
+                Err(CoreError::UnrecognizedSchema)
+            ));
+            let rejected = Connection::open(&path).unwrap();
+            assert_eq!(schema_objects(&rejected).unwrap(), before);
+            assert_eq!(
+                rejected
+                    .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                0
+            );
+        }
+    }
 }
