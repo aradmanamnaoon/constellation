@@ -93,6 +93,24 @@ fn fixture(
                         | std::io::ErrorKind::BrokenPipe
                 )
         };
+        if reject_mime {
+            // For a rejected media type the real client MUST refuse before
+            // exposing any body text. Send a *complete* valid SSE body in the
+            // same bounded write as its HTTP headers: the negative test will
+            // still catch a client that accidentally streams that text, but
+            // Windows cannot race a long sequence of tiny writes against the
+            // expected immediate close after headers (WSAECONNABORTED).
+            // The accepted-content-type tests below deliberately keep their
+            // many small writes to exercise incremental decoder framing.
+            let mut response = header.into_bytes();
+            response.extend_from_slice(&body);
+            if let Err(error) = stream.write_all(&response)
+                && !expected_early_close(&error)
+            {
+                panic!("native rejected MIME fixture write failed: {error}");
+            }
+            return;
+        }
         if let Err(error) = stream.write_all(header.as_bytes()) {
             if expected_early_close(&error) {
                 return;

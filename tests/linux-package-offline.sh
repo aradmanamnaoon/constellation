@@ -12,7 +12,7 @@ cache="${CONSTELLATION_LINUX_CACHE:-/home/saba/.cache}"
   echo 'Frozen Tauri source or prebuilt static frontend absent' >&2; exit 2;
 }
 [[ "$(uname -m)" == x86_64 ]] || { echo 'Only x86_64 supported' >&2; exit 2; }
-for tool in tar cargo dpkg-deb sha256sum file ldd; do command -v "$tool" >/dev/null; done
+for tool in tar cargo dpkg-deb sha256sum file ldd node; do command -v "$tool" >/dev/null; done
 
 mkdir -p "$cache/constellation-linux-packages"
 run="$(mktemp -d "$cache/constellation-linux-packages/run.XXXXXXXX")"
@@ -64,6 +64,11 @@ tar -C "$repo" --exclude=target --exclude=node_modules --exclude=dist \
   apps/desktop/src-tauri apps/desktop/src apps/desktop/package.json \
   apps/desktop/pnpm-lock.yaml apps/desktop/build crates catalog/roles.json |
   tar -C "$snapshot" -xf -
+version="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version' \
+  "$snapshot/apps/desktop/src-tauri/tauri.conf.json")"
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  echo 'Invalid frozen Tauri version: refusing to label Linux packages' >&2; exit 2;
+}
 for source in "${sources[@]}"; do sha256sum "$repo/$source"; done > "$run/source-after.sha256"
 if ! cmp -s "$run/source-before.sha256" "$run/source-after.sha256"; then
   printf 'NOTICE: concurrent edits changed the live checkout during snapshot; build is source-snapshot-specific\n' |
@@ -140,7 +145,7 @@ chmod 0644 "$pkg/usr/share/applications/app.constellation.studio.desktop"
 installed_kib="$(du -sk "$pkg/usr" | cut -f1)"
 cat > "$pkg/DEBIAN/control" <<CONTROL
 Package: constellation-studio
-Version: 0.1.0
+Version: ${version}
 Section: utils
 Priority: optional
 Architecture: amd64
@@ -152,7 +157,7 @@ Description: Constellation local-first collaboration desktop
  local source snapshot; no live provider or sync capability is implied.
 CONTROL
 chmod 0644 "$pkg/DEBIAN/control"
-deb="$run/output/constellation-studio_0.1.0_amd64.deb"
+deb="$run/output/constellation-studio_${version}_amd64.deb"
 dpkg-deb --root-owner-group --build "$pkg" "$deb"
 
 dpkg-deb --field "$deb" | tee "$run/deb-fields.txt"

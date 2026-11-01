@@ -14,17 +14,21 @@ settle_seconds="${3:-3}"
   echo 'Supply a verified run directory in the dedicated Linux cache' >&2; exit 2;
 }
 [[ -d "$run" ]] || exit 2
+command -v node >/dev/null
+version="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version' \
+  "$run/source/apps/desktop/src-tauri/tauri.conf.json")"
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 2
 case "$mode" in
   deb)
     binary="$run/extracted/usr/bin/constellation-desktop"
     private="$run/isolated-gui"
     ;;
   appimage)
-    binary="$run/output/Constellation_0.1.0_x86_64.AppImage"
+    binary="$run/output/Constellation_${version}_x86_64.AppImage"
     private="$run/isolated-gui-appimage"
     ;;
   appimage-fuse)
-    binary="$run/output/Constellation_0.1.0_x86_64.AppImage"
+    binary="$run/output/Constellation_${version}_x86_64.AppImage"
     private="$run/isolated-gui-appimage-fuse"
     ;;
   *) echo 'Mode must be deb, appimage or appimage-fuse' >&2; exit 2 ;;

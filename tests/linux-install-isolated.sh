@@ -7,7 +7,11 @@ run="${1:-}"
 [[ "$run" == /home/saba/.cache/constellation-linux-packages/run.* ]] || {
   echo 'Unexpected cache run path' >&2; exit 2;
 }
-deb="$run/output/constellation-studio_0.1.0_amd64.deb"
+command -v node >/dev/null
+version="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version' \
+  "$run/source/apps/desktop/src-tauri/tauri.conf.json")"
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 2
+deb="$run/output/constellation-studio_${version}_amd64.deb"
 [[ -f "$deb" && -d "$run/extracted" ]] || exit 2
 root="$run/rootless-dpkg-root"
 [[ ! -e "$root" ]] || { echo 'Rootless package test already exists; refusing overwrite' >&2; exit 2; }

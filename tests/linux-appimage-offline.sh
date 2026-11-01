@@ -10,6 +10,12 @@ run="${1:-}"
 }
 [[ -d "$run" ]] || exit 2
 for tool in cmp file sha256sum stat; do command -v "$tool" >/dev/null; done
+command -v node >/dev/null
+version="$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).version' \
+  "$run/source/apps/desktop/src-tauri/tauri.conf.json")"
+[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+  echo 'Invalid frozen Tauri version in AppImage source' >&2; exit 2;
+}
 
 bundle_tool=/home/saba/.cache/constellation-appimage-tools/appimagetool-x86_64.AppImage
 expected_tool_sha=793fca0ce4bcc309dc65d3f66669f58e3755643e4dadbe03932e7b436128494f
@@ -25,7 +31,7 @@ echo "$expected_runtime_sha  $runtime" | sha256sum -c --status || {
 }
 
 binary="$run/extracted/usr/bin/constellation-desktop"
-deb="$run/output/constellation-studio_0.1.0_amd64.deb"
+deb="$run/output/constellation-studio_${version}_amd64.deb"
 icon="$run/extracted/usr/share/icons/hicolor/128x128/apps/constellation.png"
 [[ -x "$binary" && -f "$deb" && -f "$icon" ]] || exit 2
 reference="${CONSTELLATION_LINUX_REFERENCE_BINARY:-/home/saba/.cache/constellation-linux-desktop/release/constellation-desktop}"
@@ -36,7 +42,7 @@ reference="${CONSTELLATION_LINUX_REFERENCE_BINARY:-/home/saba/.cache/constellati
 cmp "$binary" "$reference"
 
 appdir="$run/appimage-stage/Constellation.AppDir"
-output="$run/output/Constellation_0.1.0_x86_64.AppImage"
+output="$run/output/Constellation_${version}_x86_64.AppImage"
 inspect="$run/appimage-inspection"
 [[ ! -e "$appdir" && ! -e "$output" && ! -e "$inspect" ]] || {
   echo 'AppImage staging/output already exists; refusing to overwrite' >&2; exit 2;
