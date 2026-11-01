@@ -670,6 +670,7 @@ fn foreign_database_is_rejected_without_schema_repair() {
     // the intended independent application_id/schema rejection boundary.
     #[cfg(unix)]
     {
+        use std::fs;
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(matches!(

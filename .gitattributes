@@ -6,3 +6,5 @@ catalog/roles.foundation.json text eol=lf
 catalog/roles-expansion.psv text eol=lf
 docs/mission/COMPLETE_EXECUTION_PLAN.md text eol=lf
 skills-manifest/inventory.json text eol=lf
+# Bash runner is executed in WSL from this Windows-managed checkout.
+scripts/qa/run-ubuntu-wsl-ci.sh text eol=lf

@@ -10,10 +10,12 @@ use std::{
 
 use crate::native_consent::{LocalFileAction, NativeConsentProof};
 use constellation_core::{OperationId, PermissionGate};
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+use constellation_tools::AuthenticatedJournalHead;
 use constellation_tools::{
-    AuthenticatedJournalAnchor, AuthenticatedJournalHead, CancellationToken, ExecutionOutput,
-    JournalOperationState, LocalExecutor, OperationContext, OperationDetails, OperationOutcome,
-    OperationRequest, PreparedOperation, WriteMode,
+    AuthenticatedJournalAnchor, CancellationToken, ExecutionOutput, JournalOperationState,
+    LocalExecutor, OperationContext, OperationDetails, OperationOutcome, OperationRequest,
+    PreparedOperation, WriteMode,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -26,6 +28,7 @@ const AGENT_TURN_DENIAL_JOURNAL: &str = "agent-turn-denials.jsonl";
 /// history as its tool outcome journal. Its independent OS-pinned head is
 /// verified before a provider attempt, native review or file effect.
 const MULTI_STEP_EFFECTS_JOURNAL: &str = "native-multi-step-effects.jsonl";
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const JOURNAL_SERVICE: &str = "org.constellation.desktop.local-tool-journal.v1";
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 const JOURNAL_HEAD_SERVICE: &str = "org.constellation.desktop.local-tool-journal-head.v1";

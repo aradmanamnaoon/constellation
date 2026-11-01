@@ -55,6 +55,9 @@ mod model_proposal_budget;
 mod model_proposal_contract;
 mod native_agent_resume;
 mod native_agent_turn;
+// This module implements a Windows-only trusted OS dialog. Other platforms
+// retain its fail-closed consent API, but cannot invoke Windows dialog helpers.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod native_consent;
 mod native_model_binding;
 mod native_multi_step_checkpoint;
@@ -64,6 +67,9 @@ mod provider_stream_transport_contract;
 #[cfg(test)]
 mod provider_transport_contract;
 mod tool_host;
+// Linux/Android intentionally cannot open OS-vault-backed turn checkpoints.
+// Windows and macOS still compile this module under strict dead-code checks.
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 mod turn_checkpoint;
 
 struct StudioState {

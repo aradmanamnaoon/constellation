@@ -19,10 +19,9 @@ use constellation_agent_loop::{
 };
 use constellation_core::{ProviderProfile, StudioStore, TaskId, TaskState};
 use constellation_tools::OperationContext;
-use ring::{
-    hmac,
-    rand::{SecureRandom, SystemRandom},
-};
+use ring::hmac;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use ring::rand::{SecureRandom, SystemRandom};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
