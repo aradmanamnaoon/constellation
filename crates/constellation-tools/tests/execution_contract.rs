@@ -679,10 +679,25 @@ fn git_push_needs_distinct_permission_and_exact_approved_branch() {
 
 #[test]
 fn git_status_executes_against_a_real_repository_when_git_installed() {
+    // Homebrew commonly publishes /opt/homebrew/bin/git as a symlink into
+    // Cellar. The executor correctly refuses symlink executables, even when
+    // their targets are regular files: resolve the Git identity explicitly
+    // *before* requesting approval, never by relaxing executable_file().
     let executable = std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths)
             .map(|directory| directory.join(if cfg!(windows) { "git.exe" } else { "git" }))
-            .find(|path| path.is_file())
+            .filter(|path| path.is_file())
+            .filter_map(|path| fs::canonicalize(path).ok())
+            .find(|path| {
+                path.is_file()
+                    && path.file_name().is_some_and(|name| {
+                        if cfg!(windows) {
+                            name.to_string_lossy().eq_ignore_ascii_case("git.exe")
+                        } else {
+                            name == "git"
+                        }
+                    })
+            })
     });
     let Some(executable) = executable else { return };
     let dir = tempfile::tempdir().unwrap();
@@ -712,4 +727,141 @@ fn git_status_executes_against_a_real_repository_when_git_installed() {
         .unwrap();
     assert_eq!(receipt.outcome, OperationOutcome::Succeeded);
     assert!(matches!(result, Some(ExecutionOutput::Process(_))));
+}
+
+#[test]
+fn git_action_refuses_path_lookup_and_shell_metacharacters() {
+    let root = tempfile::tempdir().unwrap();
+    let tool = runner(root.path());
+    let executable = std::env::current_exe().unwrap();
+    fs::create_dir(root.path().join(".git")).unwrap();
+    fs::write(root.path().join(".git/config"), "[core]\n\tbare = false\n").unwrap();
+    // A caller must supply an existing absolute executable, never a program
+    // name that could be resolved through a spoofed PATH entry.
+    for candidate in ["git", "git.exe", "./git", "../git"] {
+        assert!(matches!(
+            tool.prepare(
+                context(),
+                OperationRequest::Git {
+                    executable: candidate.into(),
+                    repository: PathBuf::new(),
+                    action: GitAction::Status,
+                    timeout: Duration::from_secs(5),
+                }
+            ),
+            Err(ToolError::InvalidCommand)
+        ));
+    }
+    // GitPush does not invoke any shell and rejects branch/ref injection at
+    // the preparation boundary, before an approval or child process exists.
+    for branch in [
+        "main;touch /tmp/owned",
+        "main$(touch /tmp/owned)",
+        "main`touch /tmp/owned`",
+        "--upload-pack=sh",
+        "main\nnext",
+    ] {
+        assert!(matches!(
+            tool.prepare(
+                context(),
+                OperationRequest::Git {
+                    executable: executable.clone(),
+                    repository: PathBuf::new(),
+                    action: GitAction::Push {
+                        remote_url: "https://example.com/repo.git".into(),
+                        branch: branch.into(),
+                    },
+                    timeout: Duration::from_secs(5),
+                }
+            ),
+            Err(ToolError::InvalidCommand)
+        ));
+    }
+    // A semicolon inside an otherwise valid HTTPS URL remains an exact argv
+    // string, not a shell expression; this prepares a proposal only and never
+    // approves a remote push or spawns Git.
+    let inert_url = "https://example.com/repo.git;touch-owned";
+    let prepared = tool
+        .prepare(
+            context(),
+            OperationRequest::Git {
+                executable,
+                repository: PathBuf::new(),
+                action: GitAction::Push {
+                    remote_url: inert_url.into(),
+                    branch: "main".into(),
+                },
+                timeout: Duration::from_secs(5),
+            },
+        )
+        .unwrap();
+    let OperationDetails::Command { argv, git, .. } = prepared.preview().details else {
+        panic!("expected Git command preview");
+    };
+    assert!(git);
+    assert_eq!(argv[argv.len() - 2], inert_url);
+    assert_eq!(argv.last().unwrap(), "refs/heads/main:refs/heads/main");
+    assert_eq!(argv.iter().filter(|arg| arg.as_str() == "push").count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn git_action_rejects_symlink_executable_even_if_target_is_a_real_binary() {
+    use std::os::unix::fs::symlink;
+    let root = tempfile::tempdir().unwrap();
+    let tool = runner(root.path());
+    fs::create_dir(root.path().join(".git")).unwrap();
+    fs::write(root.path().join(".git/config"), "[core]\n\tbare = false\n").unwrap();
+    let executable = fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
+    let alias = root.path().join("git");
+    symlink(&executable, &alias).unwrap();
+    assert!(matches!(
+        tool.prepare(
+            context(),
+            OperationRequest::Git {
+                executable: alias,
+                repository: PathBuf::new(),
+                action: GitAction::Status,
+                timeout: Duration::from_secs(5),
+            }
+        ),
+        Err(ToolError::InvalidCommand)
+    ));
+    // Explicit canonical identity remains possible; a symlink in the
+    // selected request path never becomes a silent approval redirect.
+    assert!(tool
+        .prepare(
+            context(),
+            OperationRequest::Git {
+                executable,
+                repository: PathBuf::new(),
+                action: GitAction::Status,
+                timeout: Duration::from_secs(5),
+            }
+        )
+        .is_ok());
+
+    let outside = tempfile::tempdir().unwrap();
+    fs::create_dir(outside.path().join(".git")).unwrap();
+    fs::write(
+        outside.path().join(".git/config"),
+        "[core]\n\tbare = false\n",
+    )
+    .unwrap();
+    let linked_repository = root.path().join("outside-repository");
+    symlink(outside.path(), &linked_repository).unwrap();
+    // A Git operation must not escape the approved workspace via a symlinked
+    // repository directory, even if a real .git directory exists at the end.
+    assert!(matches!(
+        tool.prepare(
+            context(),
+            OperationRequest::Git {
+                executable: fs::canonicalize(std::env::current_exe().unwrap()).unwrap(),
+                repository: PathBuf::from("outside-repository"),
+                action: GitAction::Status,
+                timeout: Duration::from_secs(5),
+            }
+        ),
+        Err(ToolError::SymlinkDenied | ToolError::ScopeEscape)
+    ));
 }

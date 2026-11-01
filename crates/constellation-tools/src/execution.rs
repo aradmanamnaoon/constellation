@@ -79,7 +79,12 @@ pub enum GitAction {
 
 /// All paths except executable paths are relative to the selected workspace.
 /// Executables must be existing, absolute regular files and are never found
-/// through PATH. Git uses fixed argv with hooks and external diff disabled.
+/// through PATH. A trusted host must explicitly resolve package-manager
+/// executable aliases (including Homebrew's symlinked Git) to a canonical
+/// regular file before requesting approval; raw symlink/reparse paths are
+/// rejected instead of silently redirecting an approval. The preview and
+/// one-use digest bind the canonical file and its SHA-256.
+/// Git uses fixed argv with hooks and external diff disabled.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OperationRequest {
     Read {

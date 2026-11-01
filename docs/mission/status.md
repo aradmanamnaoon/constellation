@@ -1,5 +1,17 @@
 # Constellation — engineering status
 
+**November 1, 2026 publication update:** A new **private** development
+repository now exists at
+[aradmanamnaoon/constellation](https://github.com/aradmanamnaoon/constellation).
+Its `main` branch contains a reviewed, **unreleased** source checkpoint
+(`4cc8919`) followed by the initial cross-platform CI correction
+(`b2ab34e`). Hosted CI has begun, but documentation and macOS tool-library
+failures remain under investigation. **No public release or verified
+Windows/macOS/Linux/Android installer set has been published.** This status
+supersedes older observations below that the local repository had no remote.
+The 188-row acceptance ledger remains open and must not be marked complete
+from unit tests or historical packages.
+
 **Checkpoint:** 2026-10-30. **Classification:** experimental local-first desktop application; incomplete against the original 1,237-line master specification and [188-row acceptance ledger](../quality/acceptance-ledger.md). The authoritative, current [23-workstream task board](active-task-plan.md) tracks what has and has not been verified. This checkout is not a production release.
 
 ## Working tree and release identity
