@@ -161,6 +161,20 @@ test('both hosted workflows pin every third-party GitHub Action to an immutable 
   }
 });
 
+test('every hosted checkout explicitly refuses to persist GitHub credentials', () => {
+  for (const [name, source] of [
+    ['acceptance', workflow],
+    ['validation', validationWorkflow],
+  ]) {
+    const checkouts = [...source.matchAll(/^      - uses: actions\/checkout@[0-9a-f]{40}\r?\n([\s\S]*?)(?=^      - (?:uses:|name:|run:|shell:)|^  [a-z][a-z-]+:|\Z)/gm)];
+    assert(checkouts.length >= 2, `${name}: expected native checkout gates`);
+    for (const [, stepBody] of checkouts) {
+      assert.match(stepBody, /^        with:\r?\n          persist-credentials: false(?:\r?\n|$)/m,
+        `${name}: checkout must disable credential persistence`);
+    }
+  }
+});
+
 test('release path is opt-in and fail closed if platform, evidence or signing unverified', () => {
   const release = workflow.slice(workflow.indexOf('\n  release-assets:'));
   assert.match(release, /github\.event_name == 'workflow_dispatch'/);
