@@ -620,6 +620,16 @@ fn ensure_no_symlink_components(path: &Path) -> Result<()> {
     } else {
         std::env::current_dir()?.join(path)
     };
+    // Reject lexical traversal before probing path prefixes. On some
+    // filesystems (notably Windows) a missing intermediate component can
+    // otherwise produce an I/O error before we reach a later ".." segment.
+    // Explicitly classify all parent traversal as UnsafePath on every host.
+    if absolute
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ProjectBackupError::UnsafePath);
+    }
     let mut traversed = PathBuf::new();
     for component in absolute.components() {
         match component {

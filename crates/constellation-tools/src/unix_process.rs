@@ -350,7 +350,10 @@ mod cwd_identity_tests {
         fs::create_dir(&pinned).unwrap();
         let guard = pin_parent(&root, Path::new("approved/.constellation-cwd-pin")).unwrap();
         for case in 0..16 {
-            let mut command = Command::new("/bin/true");
+            // macOS runners have /bin/sh but need not have Linux's /bin/true.
+            // Exit in the child without depending on PATH or a system utility.
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "exit 0"]);
             command.stdout(Stdio::null()).stderr(Stdio::null());
             let (mut child, mut group) = UnixProcessGroup::spawn(&mut command, &guard).unwrap();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -366,5 +369,33 @@ mod cwd_identity_tests {
             });
             assert!(child.wait().unwrap().success());
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn live_leader_with_background_descendant_cannot_use_exited_group_exemption() {
+        use std::io::BufRead;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(workspace.path()).unwrap();
+        fs::create_dir(root.join("approved")).unwrap();
+        let guard = pin_parent(&root, Path::new("approved/.constellation-cwd-pin")).unwrap();
+
+        // The shell launches a background descendant before signaling ready.
+        // Keep its leader alive with wait, then verify the zombie-only path
+        // rejects the *live* process group before the ordinary group kill.
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 30 & printf 'ready\\n'; wait"]);
+        command.stdout(Stdio::piped()).stderr(Stdio::null());
+        let (mut child, mut group) = UnixProcessGroup::spawn(&mut command, &guard).unwrap();
+        let mut line = String::new();
+        std::io::BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut line)
+            .unwrap();
+        assert_eq!(line, "ready\n");
+        assert!(!group.parent_exited_without_reaping().unwrap());
+        assert!(!group.macos_only_unreaped_zombie_leader().unwrap());
+        group.terminate().unwrap();
+        assert!(!child.wait().unwrap().success());
     }
 }

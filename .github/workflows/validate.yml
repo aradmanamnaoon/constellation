@@ -315,6 +315,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: 1.99.1
+          # This job explicitly invokes Clippy. Hosted Windows runners do not
+          # necessarily preinstall the component for the pinned toolchain;
+          # request it rather than accepting a missing-linter failure.
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri

@@ -11,6 +11,31 @@ use tempfile::TempDir;
 
 const PASS: &[u8] = b"strong-integration-test-passphrase";
 
+/// A caller of ProjectBackupService must supply component-safe, canonical
+/// paths. On macOS the system temporary directory can be exposed via the
+/// /var -> /private/var symlink; passing that alias to the security validator
+/// would correctly be rejected before reaching the test's actual assertion.
+/// Create test fixtures beneath the canonical OS temp root instead of
+/// weakening production symlink containment or skipping negative cases.
+fn safe_test_tempdir() -> TempDir {
+    #[cfg(target_os = "macos")]
+    {
+        let canonical_temp_root = fs::canonicalize(std::env::temp_dir())
+            .expect("system temporary directory must have a canonical identity");
+        tempfile::Builder::new()
+            .prefix("constellation-project-archive-")
+            .tempdir_in(&canonical_temp_root)
+            .expect("create isolated directory below canonical temporary root")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Windows extended-length paths returned by fs::canonicalize can
+        // normalize away "/sub/../" during PathBuf::join, accidentally
+        // invalidating the adversarial lexical-parent-traversal test.
+        TempDir::new().expect("create isolated project-archive test directory")
+    }
+}
+
 fn new_wal_database(path: &Path, table: &str, value: &str) -> Connection {
     let db = Connection::open(path).unwrap();
     let journal: String = db
@@ -94,7 +119,7 @@ fn matching_generation(
 
 #[test]
 fn pair_validator_fails_closed_on_divergent_images_then_checks_verified_restore() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (studio, workflows) = fixture(&dir);
     studio
         .execute_batch("CREATE TABLE backup_generation(generation INTEGER NOT NULL); INSERT INTO backup_generation VALUES(7)")
@@ -192,7 +217,7 @@ fn pair_validator_fails_closed_on_divergent_images_then_checks_verified_restore(
 
 #[test]
 fn pair_validator_sees_query_only_database_images() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _workflows) = fixture(&dir);
     let archive = dir.path().join("read-only.cbackup");
     ProjectBackupService
@@ -220,7 +245,7 @@ fn pair_validator_sees_query_only_database_images() {
 
 #[test]
 fn coordinated_capture_preserves_matching_live_wal_pair_and_archive_format() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (studio, workflows) = fixture(&dir);
     studio
         .execute_batch(
@@ -303,7 +328,7 @@ fn coordinated_capture_preserves_matching_live_wal_pair_and_archive_format() {
 
 #[test]
 fn coordinated_capture_busy_second_writer_fence_times_out_without_publication() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     // The canonical lexicographic order is a then z; second must not block
     // indefinitely while the first reservation is held.
     let first = dir.path().join("a-studio.db");
@@ -351,7 +376,7 @@ fn coordinated_capture_busy_second_writer_fence_times_out_without_publication() 
 
 #[test]
 fn authenticated_sqlite_images_reject_extra_bytes_or_false_page_counts() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _workflows) = save_package(&dir);
     let codec = BackupCodec::new(BackupLimits::new(MAX_PLAINTEXT_BYTES).unwrap());
     let package = fs::read(dir.path().join("both.cbackup")).unwrap();
@@ -402,7 +427,7 @@ fn authenticated_sqlite_images_reject_extra_bytes_or_false_page_counts() {
 
 #[test]
 fn active_wals_in_both_databases_restore_from_one_encrypted_file() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _flows) = save_package(&dir);
     let package = dir.path().join("both.cbackup");
     let raw = fs::read(&package).unwrap();
@@ -443,7 +468,7 @@ fn active_wals_in_both_databases_restore_from_one_encrypted_file() {
 
 #[test]
 fn wrong_passphrase_or_tampered_ciphertext_cannot_publish_restore() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _flows) = save_package(&dir);
     let source = dir.path().join("both.cbackup");
     assert!(ProjectBackupService
@@ -463,7 +488,7 @@ fn wrong_passphrase_or_tampered_ciphertext_cannot_publish_restore() {
 
 #[test]
 fn authenticated_corrupt_lengths_hashes_and_version_fail_before_creating_directory() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _flows) = save_package(&dir);
     let codec = BackupCodec::new(BackupLimits::new(MAX_PLAINTEXT_BYTES).unwrap());
     let package = fs::read(dir.path().join("both.cbackup")).unwrap();
@@ -495,7 +520,7 @@ fn authenticated_corrupt_lengths_hashes_and_version_fail_before_creating_directo
 
 #[test]
 fn backup_and_restore_never_clobber_existing_paths_or_partial_crash_directories() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _flows) = save_package(&dir);
     let source = dir.path().join("both.cbackup");
     let original = fs::read(&source).unwrap();
@@ -534,28 +559,30 @@ fn backup_and_restore_never_clobber_existing_paths_or_partial_crash_directories(
 
 #[test]
 fn distinct_sources_and_parent_traversal_are_mandatory() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _flows) = fixture(&dir);
     let same = dir.path().join("primary.db");
     assert!(matches!(
         ProjectBackupService.create_archive(&same, &same, dir.path().join("bad.cbackup"), PASS),
         Err(ProjectBackupError::DuplicateSource)
     ));
-    assert!(matches!(
-        ProjectBackupService.create_archive(
-            &same,
-            dir.path().join("execution.db"),
-            dir.path().join("sub").join("..").join("bad.cbackup"),
-            PASS
-        ),
-        Err(ProjectBackupError::UnsafePath)
-    ));
+    let traversal = dir.path().join("sub").join("..").join("bad.cbackup");
+    let result = ProjectBackupService.create_archive(
+        &same,
+        dir.path().join("execution.db"),
+        &traversal,
+        PASS,
+    );
+    assert!(
+        matches!(result, Err(ProjectBackupError::UnsafePath)),
+        "parent traversal must be rejected before any IO: {result:?}; path {traversal:?}"
+    );
     assert!(!dir.path().join("bad.cbackup").exists());
 }
 
 #[test]
 fn orphan_staging_from_interrupted_process_never_becomes_the_restore() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _flows) = save_package(&dir);
     // Model a process terminated between writing the first SQLite image and
     // publishing the destination: an orphan staging directory may survive.
@@ -599,7 +626,7 @@ fn orphan_staging_from_interrupted_process_never_becomes_the_restore() {
 
 #[test]
 fn authenticated_invalid_sqlite_bytes_fail_before_publication() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _flows) = save_package(&dir);
     let codec = BackupCodec::new(BackupLimits::new(MAX_PLAINTEXT_BYTES).unwrap());
     let package = fs::read(dir.path().join("both.cbackup")).unwrap();
@@ -628,7 +655,7 @@ fn authenticated_invalid_sqlite_bytes_fail_before_publication() {
 #[test]
 fn symlinked_source_and_destinations_are_denied() {
     use std::os::unix::fs::symlink;
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _flows) = save_package(&dir);
     let link = dir.path().join("linked.db");
     symlink(dir.path().join("primary.db"), &link).unwrap();
@@ -656,7 +683,7 @@ fn symlinked_source_and_destinations_are_denied() {
 #[cfg(windows)]
 #[test]
 fn canonical_verbatim_paths_roundtrip_live_wals_and_still_refuse_clobber() {
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _flows) = fixture(&dir);
     let canonical = fs::canonicalize(dir.path()).unwrap();
     assert!(
@@ -721,7 +748,7 @@ fn canonical_verbatim_paths_roundtrip_live_wals_and_still_refuse_clobber() {
 fn canonical_verbatim_paths_still_reject_junction_components() {
     use std::os::windows::process::CommandExt;
 
-    let dir = TempDir::new().unwrap();
+    let dir = safe_test_tempdir();
     let (_studio, _flows) = save_package(&dir);
     let canonical = fs::canonicalize(dir.path()).unwrap();
     let junction = dir.path().join("junction-to-fixture");
