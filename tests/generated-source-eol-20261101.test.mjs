@@ -37,7 +37,10 @@ test('all byte-verified generated source files have explicit LF checkout rules',
 
 test('negative mutation refuses removal of byte-stable generated role checkout rule', () => {
   const attributes = readFileSync(path.join(root, '.gitattributes'), 'utf8');
-  const mutated = attributes.replace('catalog/roles.json text eol=lf\n', '');
+  // .gitattributes itself may be checked out with CRLF on Windows; the test
+  // must be independent of its own line endings while requiring LF for the
+  // explicitly pinned generated files.
+  const mutated = attributes.replace(/catalog\/roles\.json text eol=lf\r?\n/, '');
   assert.notEqual(mutated, attributes);
   assert.throws(() => assertLfContract(mutated, 'catalog/roles.json'), assert.AssertionError);
 });
