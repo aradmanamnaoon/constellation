@@ -19,7 +19,22 @@ fn git_binary() -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path)
         .map(|directory| directory.join(if cfg!(windows) { "git.exe" } else { "git" }))
-        .find(|candidate| candidate.is_file())
+        .filter(|candidate| candidate.is_file())
+        // Homebrew commonly exposes /opt/homebrew/bin/git as a symlink.
+        // The production executor intentionally rejects a symlink supplied
+        // for approval: tests must present the canonical executable identity
+        // and never weaken the executor's host-enforced identity contract.
+        .filter_map(|candidate| fs::canonicalize(candidate).ok())
+        .find(|canonical| {
+            canonical.is_file()
+                && canonical.file_name().is_some_and(|name| {
+                    if cfg!(windows) {
+                        name.to_string_lossy().eq_ignore_ascii_case("git.exe")
+                    } else {
+                        name == "git"
+                    }
+                })
+        })
 }
 
 fn new_repo(path: &Path, git: &Path) {
