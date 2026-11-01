@@ -395,15 +395,69 @@ jobs:
     needs: [source-manifest, frontend-check]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 65
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.17.0'
+      - name: Verify generated Android project and permission contracts
+        run: |
+          node --test tests/android-native-project-contract-20261101.test.mjs
+          test -f apps/desktop/src-tauri/gen/android/gradle/wrapper/gradle-wrapper.jar
+      - name: Pin the Android Rust target
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.99.1 --profile minimal
+          rustup +1.99.1 target add aarch64-linux-android
+      - name: Provision pinned official Android SDK platform and verify NDK/Java
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${ANDROID_HOME:=${ANDROID_SDK_ROOT:-}}"
+          test -d "$ANDROID_HOME"
+          test -x "$(command -v java)"
+          test -d "$ANDROID_HOME/ndk"
+          NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
+          test -n "$NDK_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install 'platforms;android-37' 'build-tools;36.0.0'
+          test -f "$ANDROID_HOME/platforms/android-37/android.jar"
+      - name: Attempt Android ARM64 debug APK build (not a signed release)
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --global pnpm@12.15.0
+          pnpm install --frozen-lockfile
+          pnpm exec tauri android build --debug --apk -t aarch64 --ci
+      - name: Inspect locally installable diagnostic APK, not a release
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' apks < <(find apps/desktop/src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' -print0)
+          test "${#apks[@]}" -eq 1
+          file "${apks[0]}"
+          sha256sum "${apks[0]}"
+          mkdir -p target/android-diagnostic
+          cp -- "${apks[0]}" target/android-diagnostic/Constellation-arm64-debug-unverified.apk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: android-arm64-debug-apk-unsigned-uninstalled-unverified
+          path: target/android-diagnostic/Constellation-arm64-debug-unverified.apk
+          if-no-files-found: error
+          retention-days: 7
       - name: Refuse unsigned/uninstalled Android release without verified Android project and keystore
         shell: bash
         run: |
-          echo 'Android ARM64 signed APK, verified keystore, emulator ADB install and resume smoke are not configured.'
+          echo 'Diagnostic debug APK is NOT a signed release artifact.'
+          echo 'Android ARM64 release keystore, emulator ADB install and resume smoke are not configured.'
           echo 'No signing credentials were provided; refusing to mark the Android family passed.'
           exit 1
 

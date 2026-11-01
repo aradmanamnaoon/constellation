@@ -32,6 +32,41 @@ fn wait_for_file(path: &Path) {
     }
 }
 
+// A single fixed-delay heartbeat comparison is insufficient on overloaded CI
+// runners: the independent control can remain alive yet be descheduled for the
+// entire sample interval. Check both process liveness and actual forward
+// progress over a bounded interval, without forgiving an exited control.
+fn require_live_control_progress(
+    child: &mut Child,
+    heartbeat_path: &Path,
+    previous: &[u8],
+) -> Result<(), &'static str> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        if child
+            .try_wait()
+            .map_err(|_| "control status unavailable")?
+            .is_some()
+        {
+            return Err("unrelated control exited during cleanup");
+        }
+        if fs::read(heartbeat_path).map_err(|_| "control heartbeat unreadable")? != previous {
+            if child
+                .try_wait()
+                .map_err(|_| "control status unavailable")?
+                .is_some()
+            {
+                return Err("unrelated control exited after heartbeat changed");
+            }
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err("live unrelated control made no heartbeat progress");
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 #[ignore = "executed only as grandchild of the approved local process"]
 fn tick_grandchild_fixture() {
@@ -215,12 +250,25 @@ fn run_group_cleanup(cause: Cause) {
         before,
         "grandchild kept running"
     );
-    assert_ne!(
-        fs::read(control_path).unwrap(),
-        control_before,
-        "cleanup affected unrelated control process"
+    require_live_control_progress(&mut unrelated.0, &control_path, &control_before)
+        .unwrap_or_else(|reason| panic!("cleanup affected unrelated control process: {reason}"));
+}
+
+#[test]
+fn exited_control_is_never_treated_as_heartbeat_progress() {
+    let workspace = tempfile::tempdir().unwrap();
+    let heartbeat_path = workspace.path().join("control.heartbeat");
+    fs::write(&heartbeat_path, b"0").unwrap();
+    let mut exited = Command::new("/bin/sh")
+        .args(["-c", "exit 0"])
+        .spawn()
+        .unwrap();
+    assert!(exited.wait().unwrap().success());
+    fs::write(&heartbeat_path, b"1").unwrap();
+    assert_eq!(
+        require_live_control_progress(&mut exited, &heartbeat_path, b"0"),
+        Err("unrelated control exited during cleanup")
     );
-    assert!(unrelated.0.try_wait().unwrap().is_none());
 }
 
 #[test]

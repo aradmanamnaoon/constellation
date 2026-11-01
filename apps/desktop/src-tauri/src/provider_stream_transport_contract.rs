@@ -109,10 +109,10 @@ fn fixture(
                 panic!("native model stream response body write failed: {error}");
             }
         }
-        if let Err(error) = stream.flush() {
-            if !expected_early_close(&error) {
-                panic!("native model stream response flush failed: {error}");
-            }
+        if let Err(error) = stream.flush()
+            && !expected_early_close(&error)
+        {
+            panic!("native model stream response flush failed: {error}");
         }
     });
     let base_url = match kind {
