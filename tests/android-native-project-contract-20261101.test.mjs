@@ -69,3 +69,14 @@ test('Android debug APK is explicitly nonrelease and requires its debug signer t
   assert.match(workflow, /Refuse production Android release without installed-device acceptance and release signing/);
   assert.match(workflow, /No signing credentials were provided; refusing to mark the Android family passed/);
 });
+
+test('Android hosted build pins exact SDK, build tools and NDK rather than selecting an arbitrary latest toolchain', () => {
+  const workflow = readFileSync(path.join(root, '.github/workflows/acceptance.yml'), 'utf8');
+  const androidJob = workflow.slice(workflow.indexOf('\n  android-build:'), workflow.indexOf('\n  docs-links:'));
+  assert.match(androidJob, /NDK_VERSION=28\.2\.13676358/);
+  assert.match(androidJob, /"ndk;\$NDK_VERSION"/);
+  assert.match(androidJob, /'platforms;android-37' 'build-tools;36\.0\.0'/);
+  assert.match(androidJob, /javac -version/);
+  assert.doesNotMatch(androidJob, /sort -V|tail -n 1/);
+  assert.match(androidJob, /test -d "\$NDK_HOME\/toolchains\/llvm\/prebuilt"/);
+});

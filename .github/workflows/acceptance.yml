@@ -430,22 +430,28 @@ jobs:
           set -euo pipefail
           rustup toolchain install 1.99.1 --profile minimal
           rustup +1.99.1 target add aarch64-linux-android
-      - name: Provision pinned official Android SDK platform and verify NDK/Java
+      - name: Provision exact Android SDK platform, build tools and NDK with a real JDK
         shell: bash
         run: |
           set -euo pipefail
           : "${ANDROID_HOME:=${ANDROID_SDK_ROOT:-}}"
           test -d "$ANDROID_HOME"
           test -x "$(command -v java)"
-          test -d "$ANDROID_HOME/ndk"
-          NDK_HOME="$(find "$ANDROID_HOME/ndk" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)"
-          test -n "$NDK_HOME"
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
+          test -x "$(command -v javac)"
+          java -version
+          javac -version
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           test -x "$SDKMANAGER"
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install 'platforms;android-37' 'build-tools;36.0.0'
+          # Do not select the newest machine-dependent NDK. Pin the reviewed
+          # native 28.2.13676358 version used to generate this Tauri project.
+          NDK_VERSION=28.2.13676358
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
+            'platforms;android-37' 'build-tools;36.0.0' "ndk;$NDK_VERSION"
+          NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          test -d "$NDK_HOME/toolchains/llvm/prebuilt"
           test -f "$ANDROID_HOME/platforms/android-37/android.jar"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$NDK_HOME" >> "$GITHUB_ENV"
       - name: Attempt Android ARM64 debug APK build (not a signed release)
         working-directory: apps/desktop
         shell: bash
