@@ -1,0 +1,8 @@
+# Deterministic generated files must retain their authored LF bytes on every
+# platform. In particular, Windows checkout defaults to core.autocrlf=true,
+# which otherwise invalidates byte-for-byte generator --check tests.
+catalog/roles.json text eol=lf
+catalog/roles.foundation.json text eol=lf
+catalog/roles-expansion.psv text eol=lf
+docs/mission/COMPLETE_EXECUTION_PLAN.md text eol=lf
+skills-manifest/inventory.json text eol=lf

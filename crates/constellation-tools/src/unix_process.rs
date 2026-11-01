@@ -15,6 +15,31 @@ use std::{
 
 use crate::verified_open::WriteParent;
 
+// Darwin's kill(-pgid, SIGKILL) reports EPERM if the only group member is an
+// unreaped zombie. EPERM also means a live descendant may have changed UID,
+// so errno alone must NEVER be treated as successful cleanup. Inspect the
+// entire group through the native libproc interface in this one narrow case.
+#[cfg(target_os = "macos")]
+#[link(name = "proc")]
+unsafe extern "C" {
+    fn proc_listpids(
+        kind: u32,
+        type_info: u32,
+        buffer: *mut libc::c_void,
+        buffer_size: libc::c_int,
+    ) -> libc::c_int;
+}
+
+#[cfg(target_os = "macos")]
+fn only_exited_leader_in_group(
+    leader: libc::pid_t,
+    exited: bool,
+    complete: bool,
+    member_pids: &[libc::pid_t],
+) -> bool {
+    leader > 1 && exited && complete && member_pids == [leader]
+}
+
 pub(super) struct UnixProcessGroup {
     pgid: libc::pid_t,
     armed: bool,
@@ -117,11 +142,75 @@ impl UnixProcessGroup {
         if status != 0 {
             let error = io::Error::last_os_error();
             if error.raw_os_error() != Some(libc::ESRCH) {
+                #[cfg(target_os = "macos")]
+                if error.raw_os_error() == Some(libc::EPERM)
+                    && self.macos_only_unreaped_zombie_leader()?
+                {
+                    // An exited, unreaped leader is the sole remaining group
+                    // member. Its PID is still reserved, and there is no
+                    // living member that could spawn a new descendant.
+                    self.armed = false;
+                    return Ok(());
+                }
                 return Err(error);
             }
         }
         self.armed = false;
         Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    fn macos_only_unreaped_zombie_leader(&self) -> io::Result<bool> {
+        // Confirm the leader has exited WITHOUT wait/reap: reaping before
+        // signalling the group allows PID/PGID reuse and unrelated kills.
+        if !self.parent_exited_without_reaping()? {
+            return Ok(false);
+        }
+
+        // PROC_PGRP_ONLY = 2 (Apple libproc.h). Its zero-buffer query gives
+        // an upper bound for the process table, not just this group's size.
+        // Reserve additional slots for concurrent group changes, then reject
+        // any full/truncated/error result rather than risk missing a member.
+        const PROC_PGRP_ONLY: u32 = 2;
+        const EXTRA_SLOTS: usize = 32;
+        const MAX_CENSUS_BYTES: usize = 1 << 20;
+        let estimated =
+            unsafe { proc_listpids(PROC_PGRP_ONLY, self.pgid as u32, std::ptr::null_mut(), 0) };
+        if estimated <= 0 {
+            return Ok(false);
+        }
+        let pid_size = mem::size_of::<libc::pid_t>();
+        let Some(buffer_bytes) = usize::try_from(estimated)
+            .ok()
+            .and_then(|n| n.checked_add(EXTRA_SLOTS * pid_size))
+            .filter(|&n| n <= MAX_CENSUS_BYTES)
+        else {
+            return Ok(false);
+        };
+        let mut members = vec![0 as libc::pid_t; buffer_bytes.div_ceil(pid_size)];
+        let capacity = members.len() * pid_size;
+        let count_bytes = unsafe {
+            proc_listpids(
+                PROC_PGRP_ONLY,
+                self.pgid as u32,
+                members.as_mut_ptr().cast(),
+                capacity as libc::c_int,
+            )
+        };
+        if count_bytes <= 0 || count_bytes as usize >= capacity {
+            return Ok(false);
+        }
+        let count_bytes = count_bytes as usize;
+        if count_bytes % pid_size != 0 {
+            return Ok(false);
+        }
+        members.truncate(count_bytes / pid_size);
+        Ok(only_exited_leader_in_group(
+            self.pgid,
+            self.parent_exited_without_reaping()?,
+            true,
+            &members,
+        ))
     }
 }
 
@@ -169,5 +258,26 @@ mod cwd_identity_tests {
         let status = child.wait().unwrap();
         assert!(status.success());
         assert_eq!(output.trim_end(), moved.to_string_lossy());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn zombie_only_exemption_rejects_every_ambiguous_or_live_group() {
+        use super::only_exited_leader_in_group;
+        let leader = 4137;
+        assert!(only_exited_leader_in_group(leader, true, true, &[leader]));
+        for (exited, complete, members) in [
+            (false, true, vec![leader]),
+            (true, false, vec![leader]),
+            (true, true, vec![]),
+            (true, true, vec![leader, 4138]),
+            (true, true, vec![4138]),
+            (true, true, vec![leader, leader]),
+        ] {
+            assert!(!only_exited_leader_in_group(
+                leader, exited, complete, &members
+            ));
+        }
+        assert!(!only_exited_leader_in_group(1, true, true, &[1]));
     }
 }
