@@ -15,10 +15,11 @@ use std::{
 
 use crate::verified_open::WriteParent;
 
-// Darwin's kill(-pgid, SIGKILL) reports EPERM if the only group member is an
-// unreaped zombie. EPERM also means a live descendant may have changed UID,
-// so errno alone must NEVER be treated as successful cleanup. Inspect the
-// entire group through the native libproc interface in this one narrow case.
+// Darwin's kill(-pgid, SIGKILL) can report EPERM when the session leader is
+// exiting. EPERM also means a live descendant may have changed UID, so errno
+// alone must NEVER be treated as successful cleanup. Inspect the entire group
+// through native libproc in this one narrow case. Apple's proc_listpids also
+// returns zero on an empty group *and* on errors: the latter sets errno.
 #[cfg(target_os = "macos")]
 #[link(name = "proc")]
 unsafe extern "C" {
@@ -37,7 +38,32 @@ fn only_exited_leader_in_group(
     complete: bool,
     member_pids: &[libc::pid_t],
 ) -> bool {
-    leader > 1 && exited && complete && member_pids == [leader]
+    // XNU may detach a zombie from its former pgrp before the parent reaps
+    // it. A complete, truly empty census means no living descendant remains.
+    leader > 1 && exited && complete && (member_pids.is_empty() || member_pids == [leader])
+}
+
+#[cfg(target_os = "macos")]
+fn checked_census_count(
+    returned_bytes: libc::c_int,
+    call_errno: libc::c_int,
+    buffer_bytes: usize,
+    pid_size: usize,
+) -> Option<usize> {
+    // libproc proc_listpids() returns 0 on its underlying syscall's error
+    // as well as for an empty result. errno must have been cleared just
+    // before the call, so a zero return with a nonzero errno is *not* empty.
+    // Full buffers may be truncated by XNU: never claim no descendants.
+    let bytes = usize::try_from(returned_bytes).ok()?;
+    if (bytes == 0 && call_errno != 0)
+        || pid_size == 0
+        || buffer_bytes < pid_size
+        || bytes >= buffer_bytes
+        || bytes % pid_size != 0
+    {
+        return None;
+    }
+    Some(bytes / pid_size)
 }
 
 pub(super) struct UnixProcessGroup {
@@ -167,10 +193,12 @@ impl UnixProcessGroup {
             return Ok(false);
         }
 
-        // PROC_PGRP_ONLY = 2 (Apple libproc.h). Its zero-buffer query gives
-        // an upper bound for the process table, not just this group's size.
-        // Reserve additional slots for concurrent group changes, then reject
-        // any full/truncated/error result rather than risk missing a member.
+        // PROC_PGRP_ONLY = 2 (Apple libproc.h). XNU's NULL-buffer size query
+        // returns (nprocs + 20) * sizeof(int), EVEN for an empty group; it
+        // must be positive. A zero estimate is thus an error, not evidence of
+        // emptiness, and must remain fail-closed. Only the filled-buffer call
+        // can report a successful zero-member census. Reserve additional
+        // slots for concurrent changes and reject full/truncated results.
         const PROC_PGRP_ONLY: u32 = 2;
         const EXTRA_SLOTS: usize = 32;
         const MAX_CENSUS_BYTES: usize = 1 << 20;
@@ -189,6 +217,10 @@ impl UnixProcessGroup {
         };
         let mut members = vec![0 as libc::pid_t; buffer_bytes.div_ceil(pid_size)];
         let capacity = members.len() * pid_size;
+        // SAFETY: Darwin's thread-local __error() points at this thread's
+        // errno. Clearing it immediately before the libproc wrapper call is
+        // necessary because that wrapper maps syscall failure -1 to 0.
+        unsafe { *libc::__error() = 0 };
         let count_bytes = unsafe {
             proc_listpids(
                 PROC_PGRP_ONLY,
@@ -197,14 +229,12 @@ impl UnixProcessGroup {
                 capacity as libc::c_int,
             )
         };
-        if count_bytes <= 0 || count_bytes as usize >= capacity {
+        let call_errno = unsafe { *libc::__error() };
+        let Some(member_count) = checked_census_count(count_bytes, call_errno, capacity, pid_size)
+        else {
             return Ok(false);
-        }
-        let count_bytes = count_bytes as usize;
-        if count_bytes % pid_size != 0 {
-            return Ok(false);
-        }
-        members.truncate(count_bytes / pid_size);
+        };
+        members.truncate(member_count);
         Ok(only_exited_leader_in_group(
             self.pgid,
             self.parent_exited_without_reaping()?,
@@ -266,10 +296,12 @@ mod cwd_identity_tests {
         use super::only_exited_leader_in_group;
         let leader = 4137;
         assert!(only_exited_leader_in_group(leader, true, true, &[leader]));
+        assert!(only_exited_leader_in_group(leader, true, true, &[]));
         for (exited, complete, members) in [
             (false, true, vec![leader]),
+            (false, true, vec![]),
             (true, false, vec![leader]),
-            (true, true, vec![]),
+            (true, false, vec![]),
             (true, true, vec![leader, 4138]),
             (true, true, vec![4138]),
             (true, true, vec![leader, leader]),
@@ -279,5 +311,60 @@ mod cwd_identity_tests {
             ));
         }
         assert!(!only_exited_leader_in_group(1, true, true, &[1]));
+        assert!(!only_exited_leader_in_group(1, true, true, &[]));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn libproc_zero_is_empty_only_with_clean_errno_and_complete_buffer() {
+        use super::checked_census_count;
+        // The native wrapper maps syscall errors to zero: never mistake
+        // EPERM/EACCES/EINVAL/ENOMEM for a fully observed empty group.
+        assert_eq!(checked_census_count(0, 0, 256, 4), Some(0));
+        for errno in [libc::EPERM, libc::EACCES, libc::EINVAL, libc::ENOMEM] {
+            assert_eq!(checked_census_count(0, errno, 256, 4), None);
+        }
+        assert_eq!(checked_census_count(-1, 0, 256, 4), None);
+        assert_eq!(checked_census_count(1, 0, 256, 4), None);
+        assert_eq!(checked_census_count(6, 0, 256, 4), None);
+        assert_eq!(checked_census_count(256, 0, 256, 4), None);
+        assert_eq!(checked_census_count(260, 0, 256, 4), None);
+        assert_eq!(checked_census_count(0, 0, 0, 4), None);
+        assert_eq!(checked_census_count(0, 0, 256, 0), None);
+        assert_eq!(checked_census_count(4, 0, 256, 4), Some(1));
+        assert_eq!(checked_census_count(8, 0, 256, 4), Some(2));
+        // A stale errno after a positive byte count is not a libproc error;
+        // only the zero return is ambiguous in libproc's documented wrapper.
+        assert_eq!(checked_census_count(4, libc::EPERM, 256, 4), Some(1));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn repeated_exited_unreaped_leaders_do_not_fail_on_empty_group_census() {
+        // Repeated short-lived children increase coverage for Darwin's race
+        // between exit, zombie-list membership and process-group teardown.
+        // Each child remains unreaped until after group cleanup is checked.
+        let workspace = tempfile::tempdir().unwrap();
+        let root = fs::canonicalize(workspace.path()).unwrap();
+        let pinned = root.join("approved");
+        fs::create_dir(&pinned).unwrap();
+        let guard = pin_parent(&root, Path::new("approved/.constellation-cwd-pin")).unwrap();
+        for case in 0..16 {
+            let mut command = Command::new("/bin/true");
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+            let (mut child, mut group) = UnixProcessGroup::spawn(&mut command, &guard).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !group.parent_exited_without_reaping().unwrap() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Darwin child {case} did not exit before cleanup"
+                );
+                std::thread::yield_now();
+            }
+            group.terminate().unwrap_or_else(|error| {
+                panic!("unreaped Darwin exit-case {case} cleanup failed: {error}")
+            });
+            assert!(child.wait().unwrap().success());
+        }
     }
 }
