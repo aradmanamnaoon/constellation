@@ -61,6 +61,7 @@ $result = [ordered]@{
   physical_keyboard_result = 'NOT_TESTED: hidden non-input desktop cannot safely receive physical SendInput'
   browser_zoom_200_percent_result = 'NOT_TESTED: forced device scale and HWND resizing are not browser zoom'
   zoom_200_native_metric = $null
+  zoom_200_navigation = @()
   zoom_settings_status = 'not_requested'
   errors = @()
 }
@@ -232,6 +233,26 @@ try {
       throw 'Native 200% WebView zoom not proven: no acknowledged 200% status and >=1.5x physical UIA heading height'
     }
     $result.browser_zoom_200_percent_result = 'PASS: native WebView zoom IPC plus physical UIA heading enlargement'
+    # While true 200% WebView scaling is active, navigate through every
+    # top-level destination using UIA only. This is real native interaction,
+    # not proof of physical keys, full 200% reflow or screen-reader speech.
+    foreach ($destination in @('Home','Rooms','Tasks','Evidence','Library','Settings')) {
+      $destinationCondition = New-Object System.Windows.Automation.AndCondition(
+        (New-Object System.Windows.Automation.PropertyCondition($name,$destination)),
+        (New-Object System.Windows.Automation.PropertyCondition(
+          [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+          [System.Windows.Automation.ControlType]::Button
+        ))
+      )
+      $navigation = $root.FindFirst($scope,$destinationCondition)
+      if ($null -eq $navigation -or $navigation.Current.IsOffscreen) {
+        throw "At 200% native zoom the $destination destination is missing or offscreen"
+      }
+      Assert-ConstellationHiddenWindow $hwnd $HiddenDesktopWorkerName
+      ([System.Windows.Automation.InvokePattern]$navigation.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+      Start-Sleep -Milliseconds 120
+      $result.zoom_200_navigation += $destination
+    }
   }
 } catch {
   $result.errors += [string]$_.Exception.Message
