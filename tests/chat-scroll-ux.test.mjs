@@ -32,7 +32,8 @@ test('chat scroll preserves reading anchor and offers an explicit latest-message
   assert.match(source, /chatNearBottom && messagePage === 0/);
   assert.match(source, /chatScrollElement\.scrollTop = messages\.length === 0 \? 0 : chatScrollElement\.scrollHeight/);
   assert.match(stylesheet, /\.chat-jump-toolbar\s*\{/);
-  assert.match(source, /class:compact=\{messages\.length > 0\}/);
-  assert.match(stylesheet, /\.room-intro\.compact\s*\{[^}]*padding:13px 0 15px/);
+  assert.match(source, /\{#if messages\.length === 0\}\s*<div class="room-intro">/);
+  assert.doesNotMatch(source, /class:compact=\{messages\.length > 0\}/);
+  assert.doesNotMatch(stylesheet, /\.room-intro\.compact\s*\{/);
   assert.match(source, /notice = draftCleared[\s\S]*?await tick\(\);\s*scrollChatToBottom\(\);/);
 });

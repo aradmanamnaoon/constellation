@@ -2442,7 +2442,9 @@
           </div>
         {:else}
           <div class="chat-scroll" bind:this={chatScrollElement} onscroll={chatScrollChanged} role="region" aria-label="Conversation history and search">
-            <div class="room-intro" class:compact={messages.length > 0}><div class="room-intro-icon">#</div><h1>{room.name}</h1><p>{room.description || 'A space for you and your AI teammates to collaborate.'}</p><button class="soft-button small" onclick={() => (dialog = 'new-agent')}><Plus size={15}/> Add a teammate</button></div>
+            {#if messages.length === 0}
+              <div class="room-intro"><div class="room-intro-icon">#</div><h1>{room.name}</h1><p>{room.description || 'A space for you and your AI teammates to collaborate.'}</p><button class="soft-button small" onclick={() => (dialog = 'new-agent')}><Plus size={15}/> Add a teammate</button></div>
+            {/if}
             <div class="message-search-bar">
               <label for="conversation-message-search">Search this conversation</label>
               <input id="conversation-message-search" type="search" bind:value={messageQuery} oninput={() => (messagePage = 0)} placeholder="Find messages by text or sender…" autocomplete="off" />

@@ -165,12 +165,6 @@ h1,h2 { font-family:'Segoe UI', system-ui, sans-serif; }
 .room-intro-icon { display:grid; place-items:center; height:54px; width:54px; background:var(--color-surface-tint); border-radius:16px; color:var(--color-icon); font-size:34px; margin-bottom:22px; }
 .room-intro h1 { font-size:33px; letter-spacing:-1.5px; margin:0 0 7px; }
 .room-intro p { color:var(--color-text); font-size:13px; margin-bottom:18px; }
-.room-intro.compact { padding:13px 0 15px; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:4px 12px; }
-.room-intro.compact .room-intro-icon { display:none; }
-.room-intro.compact h1 { font-size:18px; line-height:1.35; letter-spacing:-.35px; margin:0; overflow-wrap:anywhere; }
-.room-intro.compact p { grid-column:1; margin:0; font-size:11px; line-height:1.45; color:var(--color-text-muted); display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
-.room-intro.compact > button { grid-column:2; grid-row:1 / span 2; }
-@media(max-width:600px) { .room-intro.compact { grid-template-columns:1fr; } .room-intro.compact > button { grid-column:1; grid-row:auto; justify-self:start; } }
 .message { display:flex; gap:14px; max-width:830px; padding-top:27px; }
 .message-avatar { flex:none; height:36px; width:36px; background:var(--color-surface-tint); color:var(--color-icon); border-radius:12px; display:grid; place-items:center; font-size:22px; }
 .message-avatar.user-avatar { background:var(--color-surface-tint); color:var(--color-icon); font-size:13px; font-weight:900; }
