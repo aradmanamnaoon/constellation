@@ -184,10 +184,17 @@ try {
     Assert-ConstellationHiddenWindow $hwnd $HiddenDesktopWorkerName
     ([System.Windows.Automation.InvokePattern]$settings.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
     $heading = $null; $zoomButton = $null
+    $zoomButtonCondition = New-Object System.Windows.Automation.AndCondition(
+      (New-Object System.Windows.Automation.PropertyCondition($name,'200%')),
+      (New-Object System.Windows.Automation.PropertyCondition(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Button
+      ))
+    )
     $deadline = [DateTime]::UtcNow.AddSeconds(8)
     while ([DateTime]::UtcNow -lt $deadline) {
       $heading = $root.FindFirst($scope,(New-Object System.Windows.Automation.PropertyCondition($name,'Page zoom')))
-      $zoomButton = $root.FindFirst($scope,(New-Object System.Windows.Automation.PropertyCondition($name,'200%')))
+      $zoomButton = $root.FindFirst($scope,$zoomButtonCondition)
       if ($null -ne $heading -and $null -ne $zoomButton) { break }
       Start-Sleep -Milliseconds 100
     }
@@ -195,7 +202,17 @@ try {
     $before = $heading.Current.BoundingRectangle
     $result.zoom_settings_status = 'controls_visible_in_private_native_webview'
     Assert-ConstellationHiddenWindow $hwnd $HiddenDesktopWorkerName
-    ([System.Windows.Automation.InvokePattern]$zoomButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    $patterns = @($zoomButton.GetSupportedPatterns() | ForEach-Object { $_.ProgrammaticName })
+    $result.zoom_settings_status = "200% button patterns: $($patterns -join ', ')"
+    if ($patterns -contains 'InvokePatternIdentifiers.Pattern') {
+      ([System.Windows.Automation.InvokePattern]$zoomButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    } elseif ($patterns -contains 'TogglePatternIdentifiers.Pattern') {
+      ([System.Windows.Automation.TogglePattern]$zoomButton.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)).Toggle()
+    } elseif ($patterns -contains 'LegacyIAccessiblePatternIdentifiers.Pattern') {
+      ([System.Windows.Automation.LegacyIAccessiblePattern]$zoomButton.GetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern)).DoDefaultAction()
+    } else {
+      throw "Zoom button has no supported UIA action. Patterns: $($patterns -join ', ')"
+    }
     $after = $before; $reported = $false
     $deadline = [DateTime]::UtcNow.AddSeconds(8)
     while ([DateTime]::UtcNow -lt $deadline) {

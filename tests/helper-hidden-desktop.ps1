@@ -212,6 +212,7 @@ function Invoke-ConstellationHiddenDesktopWorker {
     [switch]$TestTaskJourney,
     [switch]$TestRoomTeam,
     [switch]$TestProviderDirectory,
+    [switch]$TestZoom,
     [int]$ViewportWidth,
     [int]$ViewportHeight,
     [int]$WebViewDeviceScaleFactor = 1,
@@ -236,6 +237,7 @@ function Invoke-ConstellationHiddenDesktopWorker {
   if ($TestTaskJourney) { $scriptLine += ' -TestTaskJourney' }
   if ($TestRoomTeam) { $scriptLine += ' -TestRoomTeam' }
   if ($TestProviderDirectory) { $scriptLine += ' -TestProviderDirectory' }
+  if ($TestZoom) { $scriptLine += ' -TestZoom' }
   if ($ViewportWidth -gt 0 -and $ViewportHeight -gt 0) { $scriptLine += " -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight" }
   if ($WebViewDeviceScaleFactor -eq 2) { $scriptLine += ' -WebViewDeviceScaleFactor 2' }
   if ($ExpectedExeSha256) { $scriptLine += " -ExpectedExeSha256 $(Quote-HiddenWorkerLiteral $ExpectedExeSha256)" }
