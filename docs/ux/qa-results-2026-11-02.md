@@ -6,6 +6,31 @@
 
 **Scope:** Locally tested Windows x64 NSIS package and Linux amd64 `.deb`/`.AppImage` built from the current UX implementation. This is **not** proof of a complete four-platform release: Android, macOS, GitHub Actions, and additional native UX/security gates have explicit blockers.
 
+## Final provider-directory UX implementation candidate
+
+The new source-pinned UX follow-up is commit **`5f4aee67dee55fd63a34b4005066a533b1b4a447`**, which adds local provider-directory search and ephemeral test-result filters (no automatic provider/network request). This section supersedes the earlier binary hashes below **only for the newly implemented provider-directory UX**. Earlier results remain valid for the prior immutable candidate.
+
+### New current-source native Windows artifacts
+
+| Artifact | SHA-256 | Bytes | Signed |
+| --- | --- | ---: | --- |
+| `apps/desktop/src-tauri/target/release/constellation-desktop.exe` | `15B03E9CBC4FBF2F77E85C9F0F8440C63FEB9868D83A852BCAE7C560D33059C8` | 10,316,288 | NotSigned |
+| `apps/desktop/src-tauri/target/release/bundle/nsis/Constellation_0.1.2_x64-setup.exe` | `C33BB3491CB9230993C19BFFE0B761E4226F4867A765AEE9836763BC3C95E42C` | 3,809,482 | NotSigned |
+| Installed private QA EXE in `%TEMP%/ConstellationUXRelease20261102-v5/` | `8C6FC7685F80D5251B36A7CE7B0CDEC5D7F96052865FFF89C5E30AC659252FA7` | 10,316,288 | NotSigned |
+
+The new NSIS was executed on a hidden desktop and installed in the disposable QA location. `tests/nsis-payload-compare.py` **PASS**: exactly three Tauri `UNK`→`NSS` marker bytes differ, at offset 9,384,607; all remaining bytes are identical. Native installed UIA run `0ddad6459f994e999b19b445192ec9d0`: **PASS**, real palette, room/agent/task creation, SQLite persistence, safely disabled unconfigured task Run, creation of a dummy loopback-only provider without network calls, local provider search matching/no-match states, native screenshot and clean process close, `errors=[]`. Native standalone provider-specific run `bb8d1dd89b0846139c2f7b83a485debe` also **PASS**; its real Settings screenshot was visually inspected, showing the filtered local model and status. The native installed historical SQLite migration/reopen **PASS**, schema version 1, integrity `ok`. Exact new standalone EXE also passed encrypted backup, restore and workflow preview/save/cancel native E2E with blockers `[]`, evidence under ignored `apps/desktop/src-tauri/target/ux-evidence-provider-final/`.
+
+### New current-source native Linux artifacts
+
+| Artifact | SHA-256 | Bytes | Result |
+| --- | --- | ---: | --- |
+| `target-linux/release/bundle/deb/Constellation_0.1.2_amd64.deb` | `6C0758AA1156E8C729712765BD2206BA1E949E18B93650FC4402100622C20AE7` | 5,152,688 | PASS |
+| `target-linux/release/bundle/appimage/Constellation_0.1.2_amd64.AppImage` | `729DF1B2FBF944DE3FF1BD3EA2609AB9707DAF438EE3BD81484ABB2A1181FAF2` | 88,496,632 | PASS |
+
+Both packages freshly rebuilt from the same provider-directory UX implementation and **passed real isolated Linux Xvfb GUI smoke** (`GUI_WINDOW_VISIBLE=YES`, `GUI_WORKSPACE_RENDERED=YES`, viewport entropy `0.28195`). This includes the `.deb` private extraction and AppImage extraction-mode GUI, **rootless isolated `dpkg --root` unpack** and exact executable byte comparison (installed ELF SHA-256 `c6cffc37121e62c72a5cc30da15755ab320ae2bf06f7056b194759433513bfe5`), and the **normal AppImage FUSE-mounted native GUI**. All four checks exited zero, with no host package-manager mutation. New session screenshot evidence under private WSL cache `run.ux-20261102074629-3398`, `run.ux-appimage-20261102074636-3707`, and `run.ux-fuse-20261102074649-4069`.
+
+Frontend JS tests: **128/128 PASS**, Svelte `0 errors / 0 warnings`; strict source gate PASS (`required=77 tracked=441 source_files=236`). Rust library 130/130 and strict clippy passed earlier in this turn; no Rust production changes in this UX commit. All Windows and Linux binaries are **unsigned** and source-evidence does not establish macOS or Android parity. The Android debug diagnostic from an older JNI library still cannot serve as this commit's production release asset.
+
 ## Current source gates
 
 | Check | Observation |
