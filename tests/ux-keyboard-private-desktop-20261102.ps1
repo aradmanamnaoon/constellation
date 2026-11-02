@@ -6,6 +6,7 @@ param(
   [Parameter(Mandatory)][ValidatePattern('^[A-Fa-f0-9]{64}$')][string]$ExpectedExeSha256,
   [ValidateRange(10,50)][int]$TimeoutSeconds = 30,
   [string]$OutputDirectory,
+  [switch]$TestZoom,
   [string]$HiddenDesktopWorkerName
 )
 $ErrorActionPreference = 'Stop'
@@ -26,6 +27,7 @@ if (-not $HiddenDesktopWorkerName) {
     ExpectedExeSha256 = $ExpectedExeSha256
     TimeoutSeconds = $TimeoutSeconds
     OutputDirectory = $dir
+    TestZoom = [bool]$TestZoom
   }
   Invoke-ConstellationHiddenDesktopWorker @worker
   return
@@ -58,6 +60,8 @@ $result = [ordered]@{
   process_stopped = $false
   physical_keyboard_result = 'NOT_TESTED: hidden non-input desktop cannot safely receive physical SendInput'
   browser_zoom_200_percent_result = 'NOT_TESTED: forced device scale and HWND resizing are not browser zoom'
+  zoom_200_native_metric = $null
+  zoom_settings_status = 'not_requested'
   errors = @()
 }
 $interop = @'
@@ -173,6 +177,44 @@ try {
       if ($result.previous_focus_restored_after_uia_close) { break }
     }
     Start-Sleep -Milliseconds 120
+  }
+  if ($TestZoom) {
+    $settings = $root.FindFirst($scope,(New-Object System.Windows.Automation.PropertyCondition($name,'Settings')))
+    if ($null -eq $settings) { throw 'Settings navigation control absent for zoom test' }
+    Assert-ConstellationHiddenWindow $hwnd $HiddenDesktopWorkerName
+    ([System.Windows.Automation.InvokePattern]$settings.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    $heading = $null; $zoomButton = $null
+    $deadline = [DateTime]::UtcNow.AddSeconds(8)
+    while ([DateTime]::UtcNow -lt $deadline) {
+      $heading = $root.FindFirst($scope,(New-Object System.Windows.Automation.PropertyCondition($name,'Page zoom')))
+      $zoomButton = $root.FindFirst($scope,(New-Object System.Windows.Automation.PropertyCondition($name,'200%')))
+      if ($null -ne $heading -and $null -ne $zoomButton) { break }
+      Start-Sleep -Milliseconds 100
+    }
+    if ($null -eq $heading -or $null -eq $zoomButton) { throw 'Native WebView zoom controls unavailable in Settings' }
+    $before = $heading.Current.BoundingRectangle
+    $result.zoom_settings_status = 'controls_visible_in_private_native_webview'
+    Assert-ConstellationHiddenWindow $hwnd $HiddenDesktopWorkerName
+    ([System.Windows.Automation.InvokePattern]$zoomButton.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)).Invoke()
+    $after = $before; $reported = $false
+    $deadline = [DateTime]::UtcNow.AddSeconds(8)
+    while ([DateTime]::UtcNow -lt $deadline) {
+      $status = $root.FindFirst($scope,(New-Object System.Windows.Automation.PropertyCondition($name,'Current page zoom: 200%')))
+      if ($null -ne $status) { $reported = $true }
+      $freshHeading = $root.FindFirst($scope,(New-Object System.Windows.Automation.PropertyCondition($name,'Page zoom')))
+      if ($null -ne $freshHeading) { $after = $freshHeading.Current.BoundingRectangle }
+      if ($reported -and $before.Height -gt 0 -and $after.Height -ge ($before.Height * 1.5)) { break }
+      Start-Sleep -Milliseconds 120
+    }
+    $ratio = if ($before.Height -gt 0) { [math]::Round($after.Height / $before.Height,3) } else { 0 }
+    $result.zoom_200_native_metric = @{
+      before_height_px = $before.Height; after_height_px = $after.Height
+      actual_uia_height_ratio = $ratio; native_acknowledgement_visible = $reported
+    }
+    if (-not $reported -or $ratio -lt 1.5) {
+      throw 'Native 200% WebView zoom not proven: no acknowledged 200% status and >=1.5x physical UIA heading height'
+    }
+    $result.browser_zoom_200_percent_result = 'PASS: native WebView zoom IPC plus physical UIA heading enlargement'
   }
 } catch {
   $result.errors += [string]$_.Exception.Message

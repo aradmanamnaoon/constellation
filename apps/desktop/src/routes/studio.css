@@ -108,6 +108,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .theme-picker button.chosen { background:var(--color-action); color:var(--color-action-text); }
 .theme-picker button:focus-visible { outline:3px solid var(--color-focus); outline-offset:2px; }
 .appearance-block { gap:16px; flex-wrap:wrap; }
+.zoom-preferences { display:grid; gap:8px; min-width:0; }
+.zoom-preferences .theme-picker { flex-wrap:wrap; }
+.zoom-preferences > span { font-size:11px; color:var(--color-text-muted); }
 :root[data-theme='dark'] .studio .empty-chat,
 :root[data-theme='dark'] .studio .content-page,
 :root[data-theme='dark'] .studio .chat-scroll,

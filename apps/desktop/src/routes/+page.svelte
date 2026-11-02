@@ -146,6 +146,10 @@
   let replyFeedbackByRoom = $state<Record<string, ReplyFeedback>>({});
   let streamAnswers = $state(false);
   let themeMode = $state<'system' | 'light' | 'dark'>('system');
+  const supportedZoomLevels = [100, 125, 150, 175, 200] as const;
+  let uiZoomPercent = $state(100);
+  let uiZoomBusy = $state(false);
+  let uiZoomError = $state('');
   let streamPreviewByRoom = $state<Record<string, Record<string, string>>>({});
   let newRoom = $state('');
   let newAgent = $state('');
@@ -475,13 +479,40 @@
     try { window.localStorage.setItem('constellation-appearance', mode); }
     catch { /* User storage can be disabled; keep the session's selection. */ }
   }
+  async function setUiZoom(percent: number) {
+    if (!isNative || uiZoomBusy || !supportedZoomLevels.some((level) => level === percent)) return;
+    uiZoomBusy = true;
+    uiZoomError = '';
+    try {
+      const applied = await invoke<number>('studio_set_ui_zoom', { percent });
+      if (applied !== percent) throw new Error('Native zoom acknowledgement differs from selection');
+      uiZoomPercent = percent;
+      try { window.localStorage.setItem('constellation-ui-zoom', String(percent)); }
+      catch { /* local preference persistence may be disabled */ }
+    } catch {
+      uiZoomError = 'Native page zoom is unavailable on this device. The previous zoom is unchanged.';
+    } finally {
+      uiZoomBusy = false;
+    }
+  }
 
   onMount(() => {
     try {
       const saved = window.localStorage.getItem('constellation-appearance');
       if (saved === 'light' || saved === 'dark') setTheme(saved);
     } catch { /* Use OS appearance without browser storage. */ }
-    void (async () => { await refresh(); await hydrateComposerDrafts(); })();
+    void (async () => {
+      await refresh();
+      await hydrateComposerDrafts();
+      // Restore only a valid local preference after native runtime startup.
+      // Renderer storage is never treated as a native zoom receipt.
+      try {
+        const saved = Number(window.localStorage.getItem('constellation-ui-zoom'));
+        if (saved !== 100 && supportedZoomLevels.some((level) => level === saved)) {
+          await setUiZoom(saved);
+        }
+      } catch { /* Use the WebView's initial 100% zoom. */ }
+    })();
     const warnUnsaved = (event: BeforeUnloadEvent) => {
       if (!draftPersistence.hasUnsaved()) return;
       event.preventDefault();
@@ -2307,10 +2338,16 @@
 
   function focusDialog(node: HTMLElement) {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    let active = true;
     // Palette options are controlled by aria-activedescendant and intentionally
     // tabindex=-1; they must not be counted as Tab stops in the modal trap.
     const selector = 'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-    (node.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), .command-list button') ?? node.querySelector<HTMLElement>(selector))?.focus();
+    // The action may mount before its nested dialog content is settled.
+    // Never steal focus after the user has already selected another field.
+    void tick().then(() => {
+      if (!active || !node.isConnected || node.contains(document.activeElement)) return;
+      (node.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled])') ?? node.querySelector<HTMLElement>(selector))?.focus();
+    });
     function trapTab(event: KeyboardEvent) {
       if (event.key !== 'Tab') return;
       const controls = Array.from(node.querySelectorAll<HTMLElement>(selector));
@@ -2321,7 +2358,15 @@
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     }
     node.addEventListener('keydown', trapTab);
-    return { destroy() { node.removeEventListener('keydown', trapTab); previousFocus?.focus(); } };
+    return { destroy() {
+      active = false;
+      node.removeEventListener('keydown', trapTab);
+      void tick().then(() => {
+        // Replacing one modal with another must not restore focus outside the
+        // new modal. Return focus only on a genuine dismissal.
+        if (previousFocus?.isConnected && !document.querySelector('[aria-modal="true"]')) previousFocus?.focus();
+      });
+    } };
   }
 
   function navigate(next: Screen) {
@@ -3083,6 +3128,18 @@
             <button type="button" aria-pressed={themeMode === 'system'} class:chosen={themeMode === 'system'} onclick={() => setTheme('system')}>System</button>
             <button type="button" aria-pressed={themeMode === 'light'} class:chosen={themeMode === 'light'} onclick={() => setTheme('light')}>Light</button>
             <button type="button" aria-pressed={themeMode === 'dark'} class:chosen={themeMode === 'dark'} onclick={() => setTheme('dark')}>Dark</button>
+          </div>
+        </div>
+        <div class="settings-block appearance-block">
+          <div><SlidersHorizontal size={23}/><div><h2>Page zoom</h2><p>Enlarge the entire app using native WebView page zoom, including text and controls. Stored only on this device.</p></div></div>
+          <div class="zoom-preferences">
+            <div class="theme-picker" role="group" aria-label="Native WebView page zoom">
+              {#each supportedZoomLevels as percent}
+                <button type="button" disabled={!isNative || uiZoomBusy} aria-pressed={uiZoomPercent === percent} class:chosen={uiZoomPercent === percent} onclick={() => void setUiZoom(percent)}>{percent}%</button>
+              {/each}
+            </div>
+            <span role="status" aria-live="polite">{uiZoomBusy ? 'Applying native zoom…' : `Current page zoom: ${uiZoomPercent}%`}</span>
+            {#if uiZoomError}<p class="evidence-error" role="alert">{uiZoomError}</p>{/if}
           </div>
         </div>
         <p class="provider-probe-note">Testing is optional and sends one small text prompt to the explicitly selected provider. An API may charge for this request. A passing test does not prove tool calling, streaming, or structured output.</p>

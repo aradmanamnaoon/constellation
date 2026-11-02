@@ -31,7 +31,16 @@ test('Escape is handled globally and modal teardown requests previous focus', ()
   assert.match(page, /if \(dialog\) closeDialog\(\)/);
   assert.match(page, /const previousFocus = document\.activeElement/);
   assert.match(page, /previousFocus\?\.focus\(\)/);
+  assert.match(page, /void tick\(\)\.then\(\(\) => \{/);
+  assert.match(page, /!document\.querySelector\('\[aria-modal="true"\]'\)/);
   assert.match(page, /node\.addEventListener\('keydown', trapTab\)/);
+});
+
+test('settings exposes native WebView zoom and fail-closed acknowledgement', () => {
+  assert.match(page, /invoke<number>\('studio_set_ui_zoom', \{ percent \}\)/);
+  assert.match(page, /aria-label="Native WebView page zoom"/);
+  assert.match(page, /supportedZoomLevels = \[100, 125, 150, 175, 200\]/);
+  assert.match(page, /Native page zoom is unavailable on this device/);
 });
 
 test('palette exposes combobox/listbox/option active descendant semantics', () => {

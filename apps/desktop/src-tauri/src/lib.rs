@@ -702,6 +702,21 @@ fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+// WebView zoom is a native page-scale preference, not simulated OS DPI.
+fn checked_ui_zoom(percent: u16) -> Result<f64, String> {
+    match percent {
+        100 | 125 | 150 | 175 | 200 => Ok(f64::from(percent) / 100.0),
+        _ => Err("Select a supported WebView zoom level between 100% and 200%.".into()),
+    }
+}
+
+#[tauri::command]
+fn studio_set_ui_zoom(window: tauri::WebviewWindow, percent: u16) -> Result<u16, String> {
+    let scale = checked_ui_zoom(percent)?;
+    window.set_zoom(scale).map_err(err)?;
+    Ok(percent)
+}
+
 fn snapshot_as_view(store: &StudioStore) -> Result<Value, String> {
     let snapshot = store.snapshot().map_err(err)?;
     let agents = snapshot
@@ -4552,6 +4567,7 @@ pub fn run() {
             studio_reject_local_file_operation,
             studio_approve_local_file_operation,
             studio_bootstrap,
+            studio_set_ui_zoom,
             studio_list_room_drafts,
             studio_save_room_draft,
             studio_export_room_markdown,
@@ -4607,6 +4623,16 @@ mod tests {
     use super::*;
     use constellation_core::MessageSender;
     use sha2::Digest;
+
+    #[test]
+    fn native_webview_zoom_accepts_only_documented_local_presets() {
+        for (percent, scale) in [(100, 1.0), (125, 1.25), (150, 1.5), (175, 1.75), (200, 2.0)] {
+            assert_eq!(checked_ui_zoom(percent).unwrap(), scale);
+        }
+        for invalid in [0, 1, 50, 99, 101, 201, u16::MAX] {
+            assert!(checked_ui_zoom(invalid).is_err());
+        }
+    }
 
     #[test]
     fn native_review_cleanup_is_based_on_real_pending_status_after_denial_or_error() {
