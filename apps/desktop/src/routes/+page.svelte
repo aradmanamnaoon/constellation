@@ -394,7 +394,9 @@
   }
   function scrollChatToBottom() {
     if (!chatScrollElement) return;
-    chatScrollElement.scrollTop = chatScrollElement.scrollHeight;
+    // An empty room is onboarding, not a transcript: show the introduction
+    // from its beginning instead of accidentally scrolling it out of view.
+    chatScrollElement.scrollTop = messages.length === 0 ? 0 : chatScrollElement.scrollHeight;
     chatNearBottom = true;
     unreadMessageCount = 0;
   }
@@ -537,25 +539,29 @@
       if (!(await draftPersistence.flush(targetRoomId))) {
         throw new Error('Draft could not be saved locally. Resolve the draft error before sending.');
       }
-      await invoke('studio_send_message', {
-        roomId: targetRoomId, content, messageId: pending.messageId, operationId: pending.operationId
+      const expectedDraftRevision = draftPersistence.savedRevision(targetRoomId, content);
+      if (expectedDraftRevision === null) {
+        throw new Error('The saved draft changed; review it before sending.');
+      }
+      await invoke('studio_send_saved_draft', {
+        roomId: targetRoomId, content, messageId: pending.messageId,
+        operationId: pending.operationId, expectedDraftRevision,
       });
       persisted = true;
       delete pendingSendsByRoom[targetRoomId];
-      // A room switch or further typing can occur while native IPC is pending.
-      // Clear only the original submitted text, never another room's draft.
-      if (roomId === targetRoomId && draft.trim() === content) draft = '';
-      if ((draftsByRoom[targetRoomId] ?? '').trim() === content) {
+      // The message and tombstone were committed together. Reconcile the
+      // in-memory draft without a second native write or silent data loss.
+      const draftCleared = draftPersistence.confirmSent(targetRoomId, content, expectedDraftRevision);
+      if (draftCleared && (draftsByRoom[targetRoomId] ?? '').trim() === content) {
         draftsByRoom = { ...draftsByRoom, [targetRoomId]: '' };
-        draftPersistence.change(targetRoomId, '', true);
+        if (roomId === targetRoomId && draft.trim() === content) draft = '';
       }
-      const draftCleared = await draftPersistence.flush(targetRoomId);
       await refresh();
       // Sending saves locally. External inference is a separate, explicit action.
       replyFeedbackByRoom = { ...replyFeedbackByRoom, [targetRoomId]: { providerName: '', replies: [], requestedIds: [] } };
       notice = draftCleared
         ? 'Message saved locally. Choose a provider and use Ask selected or Ask team to request a reply.'
-        : 'Message saved, but its composer draft could not be cleared. Review saved text before resending after restart.';
+        : 'Message saved. Newer edits remain in the composer and will be saved separately.';
       // The success banner changes available transcript height after refresh.
       // Re-anchor only the room whose message was just saved, after the
       // banner/composer reflow, so the new message is actually visible.
@@ -2327,6 +2333,25 @@
     selectRoom(id);
     navigate('rooms');
   }
+  async function openRoomTeamEditor() {
+    if (!room) {
+      dialog = 'new-room';
+      await focusCurrentDialogField();
+      return;
+    }
+    focusMode = false;
+    showDetails = false;
+    sidebarOpen = false;
+    await tick();
+    const picker = document.querySelector<HTMLDetailsElement>('.reply-agent-picker');
+    if (!picker) {
+      notice = 'Add a teammate to your workspace before configuring room membership.';
+      return;
+    }
+    picker.open = true;
+    picker.querySelector<HTMLElement>('summary')?.focus();
+    picker.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+  }
 </script>
 
 <svelte:window onkeydown={keyboard} />
@@ -2364,14 +2389,17 @@
           <div class="sidebar-empty">{snapshot.rooms.length ? 'No rooms match. Clear the search to see all conversations.' : 'Rooms you create appear here.'}</div>
         {/each}
       </div>
-      <div class="sidebar-section-title agent-title"><span>YOUR TEAM</span><button title="Add an agent" aria-label="Add agent" onclick={() => (dialog = 'new-agent')}><Plus size={17}/></button></div>
+      <div class="sidebar-section-title agent-title"><span>{room ? 'ROOM TEAM' : 'YOUR TEAM'}</span><button title="Add an agent" aria-label="Add agent" onclick={() => (dialog = 'new-agent')}><Plus size={17}/></button></div>
       <div class="agent-list">
         {#each snapshot.agents as agent (agent.id)}
-          <div class="agent-item"><div class="agent-avatar">✳</div><span>{agent.name}<small>{agent.role}</small></span><span class="agent-dot" title="Not running"></span></div>
+          <button type="button" class="agent-item" class:in-room={!!room && selectedAgentIds.includes(agent.id)} aria-label={room ? `Edit room membership for ${agent.name}` : `Select a room to work with ${agent.name}`} onclick={() => void openRoomTeamEditor()}><div class="agent-avatar" aria-hidden="true">✳</div><span>{agent.name}<small>{agent.role}</small></span><span class="agent-dot" title={room && selectedAgentIds.includes(agent.id) ? 'Selected for this room' : 'Available for this room'}></span></button>
         {:else}
           <div class="sidebar-empty">Build your team from the role library.</div>
         {/each}
       </div>
+      {#if room && snapshot.agents.length > 0}
+        <button type="button" class="sidebar-team-edit" onclick={() => void openRoomTeamEditor()}>Edit room team · {selectedAgentIds.length} selected</button>
+      {/if}
     {:else}
       <div class="sidebar-section-title"><span>WORKSPACE</span></div>
       <div class="section-context">{screen === 'home' ? 'A place to begin' : screen === 'tasks' ? 'Work in progress' : screen === 'evidence' ? 'Private document search' : screen === 'library' ? 'People and capabilities' : 'Your preferences'}</div>

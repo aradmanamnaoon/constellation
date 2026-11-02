@@ -710,6 +710,86 @@ impl StudioStore {
         Ok(message)
     }
 
+    /// Save a human message and clear only its exact, revision-bound unsent
+    /// draft in ONE SQLite commit. Prevents the restart window where an
+    /// already-saved message reappears in the composer and can be resent.
+    /// The original operation ID makes uncertain IPC retries idempotent.
+    pub fn append_user_message_and_clear_draft(
+        &self,
+        message_id: MessageId,
+        room_id: RoomId,
+        content: String,
+        expected_draft_revision: i64,
+        operation_id: OperationId,
+    ) -> Result<Message> {
+        validate_text(&content, "message content")?;
+        if !(1..i64::MAX).contains(&expected_draft_revision) {
+            return Err(CoreError::InvalidInput(
+                "invalid saved draft revision".into(),
+            ));
+        }
+        let fingerprint = json!({
+            "op": "append_user_message_and_clear_draft",
+            "message_id": message_id,
+            "room_id": room_id,
+            "content": content,
+            "expected_draft_revision": expected_draft_revision,
+        });
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        verify_initialized_schema(&tx)?;
+        if let Some(previous) = previous_result::<Message>(&tx, operation_id, &fingerprint)? {
+            return Ok(previous);
+        }
+        ensure_id(&tx, "rooms", &room_id.to_string(), "room")?;
+        let existing: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT content, revision FROM room_drafts WHERE room_id=?1",
+                [room_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match existing {
+            Some((draft, revision))
+                if revision == expected_draft_revision && draft.trim() == content => {}
+            _ => return Err(CoreError::OperationConflict),
+        }
+        if id_exists(&tx, "messages", &message_id.to_string())? {
+            return Err(CoreError::AlreadyExists("message"));
+        }
+        let message = Message {
+            id: message_id,
+            room_id,
+            sender: MessageSender::User,
+            content,
+            created_at_ms: now_ms(),
+        };
+        tx.execute(
+            "INSERT INTO messages (id, room_id, data) VALUES (?1, ?2, ?3)",
+            params![
+                message.id.to_string(),
+                room_id.to_string(),
+                serde_json::to_string(&message)?
+            ],
+        )?;
+        record_event(
+            &tx,
+            operation_id,
+            &fingerprint,
+            EventKind::MessageAppended {
+                message_id: message.id,
+                room_id,
+            },
+            &message,
+        )?;
+        tx.execute(
+            "UPDATE room_drafts SET content='', revision=?1 WHERE room_id=?2",
+            params![expected_draft_revision + 1, room_id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(message)
+    }
+
     pub fn save_provider_profile(&self, profile: ProviderProfile) -> Result<()> {
         self.save_provider_profile_with_operation(profile, OperationId::new())
     }
@@ -1386,5 +1466,77 @@ mod historical_schema_startup_tests {
             store.forget_remembered_provider_credential(previous, OperationId::new()),
             Err(CoreError::OperationConflict)
         ));
+    }
+
+    #[test]
+    fn local_send_clears_draft_in_same_transaction_and_replay_cannot_duplicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("atomic-send.sqlite3");
+        let store = StudioStore::open(&path).unwrap();
+        let room = store.create_room("Atomic send").unwrap();
+        let draft = store
+            .save_room_draft(room.id, "  hello 🧪  ".into(), 0)
+            .unwrap();
+        let message_id = MessageId::new();
+        let operation = OperationId::new();
+        assert!(matches!(
+            store.append_user_message_and_clear_draft(
+                message_id,
+                room.id,
+                "hello 🧪".into(),
+                0,
+                operation,
+            ),
+            Err(CoreError::InvalidInput(_))
+        ));
+        assert_eq!(store.snapshot().unwrap().messages.len(), 0);
+        assert_eq!(store.room_drafts().unwrap(), vec![draft.clone()]);
+        let sent = store
+            .append_user_message_and_clear_draft(
+                message_id,
+                room.id,
+                "hello 🧪".into(),
+                draft.revision,
+                operation,
+            )
+            .unwrap();
+        assert_eq!(sent.id, message_id);
+        assert_eq!(sent.sender, MessageSender::User);
+        assert_eq!(store.snapshot().unwrap().messages, vec![sent.clone()]);
+        let cleared = store.room_drafts().unwrap();
+        assert_eq!(cleared[0].content, "");
+        assert_eq!(cleared[0].revision, draft.revision + 1);
+        drop(store);
+
+        let reopened = StudioStore::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .append_user_message_and_clear_draft(
+                    message_id,
+                    room.id,
+                    "hello 🧪".into(),
+                    draft.revision,
+                    operation,
+                )
+                .unwrap(),
+            sent
+        );
+        assert_eq!(reopened.snapshot().unwrap().messages, vec![sent]);
+        assert_eq!(reopened.room_drafts().unwrap(), cleared);
+        assert!(matches!(
+            reopened.append_user_message_and_clear_draft(
+                MessageId::new(),
+                room.id,
+                "hello 🧪".into(),
+                draft.revision,
+                OperationId::new(),
+            ),
+            Err(CoreError::OperationConflict)
+        ));
+        assert!(matches!(
+            reopened.save_room_draft(room.id, "resurrect".into(), draft.revision),
+            Err(CoreError::InvalidInput(_))
+        ));
+        assert_eq!(reopened.snapshot().unwrap().messages.len(), 1);
     }
 }

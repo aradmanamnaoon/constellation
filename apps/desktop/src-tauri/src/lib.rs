@@ -2156,6 +2156,37 @@ fn studio_send_message(
     Ok(())
 }
 
+/// Persist the exact saved human draft and its local message atomically.
+/// This command does not invoke a model or grant any tool permission.
+#[tauri::command]
+fn studio_send_saved_draft(
+    state: State<'_, StudioState>,
+    room_id: String,
+    content: String,
+    message_id: String,
+    operation_id: String,
+    expected_draft_revision: i64,
+) -> Result<(), String> {
+    let room_id: RoomId = room_id.parse().map_err(err)?;
+    let message_id: MessageId = message_id.parse().map_err(err)?;
+    let operation_id: OperationId = operation_id.parse().map_err(err)?;
+    let _writer = state
+        .message_write_lock
+        .lock()
+        .map_err(|_| "message lock poisoned")?;
+    state
+        .store
+        .append_user_message_and_clear_draft(
+            message_id,
+            room_id,
+            content,
+            expected_draft_revision,
+            operation_id,
+        )
+        .map_err(err)?;
+    Ok(())
+}
+
 #[tauri::command]
 fn studio_save_provider(
     state: State<'_, StudioState>,
@@ -4549,6 +4580,7 @@ pub fn run() {
             studio_add_agent,
             studio_set_agent_provider,
             studio_send_message,
+            studio_send_saved_draft,
             studio_save_provider,
             studio_remove_unused_provider,
             studio_forget_remembered_provider_key,

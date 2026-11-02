@@ -49,6 +49,37 @@ export class DraftPersistence {
 
   text(roomId: string): string { return this.entries.get(roomId)?.text ?? ''; }
 
+  /** A send may only commit a fully flushed, unchanged saved draft. */
+  savedRevision(roomId: string, content: string): number | null {
+    const entry = this.entries.get(roomId);
+    if (!entry || entry.pending || entry.timer ||
+        entry.savedText !== entry.text || entry.savedText.trim() !== content ||
+        entry.revision < 1) return null;
+    return entry.revision;
+  }
+
+  /** Apply the native atomic send confirmation without a second SQLite write. */
+  confirmSent(roomId: string, content: string, expectedRevision: number): boolean {
+    const entry = this.entries.get(roomId);
+    if (!entry || entry.pending || entry.revision !== expectedRevision ||
+        entry.savedText.trim() !== content) {
+      throw new Error('Native send completed, but the local draft revision changed; reload the saved draft');
+    }
+    if (entry.timer) clearTimeout(entry.timer);
+    entry.timer = null;
+    entry.revision = expectedRevision + 1;
+    entry.savedText = '';
+    if (entry.text.trim() === content) {
+      entry.text = '';
+      this.report(roomId, 'saved');
+      return true;
+    }
+    // A newer edit must never be silently cleared by an older send.
+    this.report(roomId, 'unsaved');
+    entry.timer = setTimeout(() => { void this.flush(roomId); }, this.delayMs);
+    return false;
+  }
+
   change(roomId: string, value: string, immediately = false): void {
     if (!roomId) return;
     let entry = this.entries.get(roomId);

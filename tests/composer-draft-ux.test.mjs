@@ -72,6 +72,47 @@ test('renderer never stores draft text in localStorage or initiates a model requ
   assert.match(source, /studio_list_room_drafts/);
   assert.match(source, /studio_save_room_draft/);
   assert.match(source, /draftPersistence\.flush\(targetRoomId\)/);
+  assert.match(source, /studio_send_saved_draft/);
+  assert.match(source, /draftPersistence\.savedRevision\(targetRoomId, content\)/);
+  assert.match(source, /draftPersistence\.confirmSent\(targetRoomId, content, expectedDraftRevision\)/);
   assert.match(source, /oninput=\{\(event\) => changeComposerDraft/);
   assert.doesNotMatch(source, /localStorage\.setItem\([^\n]*draft/i);
+});
+
+test('confirmed native atomic send clears saved text without a second write', async () => {
+  const saved = [];
+  const events = [];
+  const drafts = new DraftPersistence(async (id, text, rev) => {
+    saved.push([id, text, rev]);
+    return { room_id: id, content: text, revision: rev + 1 };
+  }, (room, status) => events.push([room, status]), 100_000);
+  drafts.change('room', '  hello 🧪  ');
+  assert.equal(await drafts.flush('room'), true);
+  const revision = drafts.savedRevision('room', 'hello 🧪');
+  assert.equal(revision, 1);
+  assert.equal(drafts.confirmSent('room', 'hello 🧪', revision), true);
+  assert.equal(drafts.text('room'), '');
+  assert.equal(drafts.hasUnsaved(), false);
+  assert.equal(drafts.savedRevision('room', 'hello 🧪'), null);
+  assert.equal(saved.length, 1, 'Clearing after successful atomic send must not write another draft');
+  assert.ok(events.some(([room, status]) => room === 'room' && status === 'saved'));
+  drafts.dispose();
+});
+
+test('atomic send confirmation will not discard a newer local edit', async () => {
+  const writes = [];
+  const drafts = new DraftPersistence(async (id, content, rev) => {
+    writes.push([content, rev]);
+    return { room_id: id, content, revision: rev + 1 };
+  }, () => {}, 100_000);
+  drafts.hydrate([{ room_id: 'room', content: 'sent text', revision: 7 }]);
+  const rev = drafts.savedRevision('room', 'sent text');
+  drafts.change('room', 'New content typed before native ack');
+  assert.equal(drafts.confirmSent('room', 'sent text', rev), false);
+  assert.equal(drafts.text('room'), 'New content typed before native ack');
+  assert.equal(drafts.hasUnsaved(), true);
+  assert.equal(await drafts.flush('room'), true);
+  assert.deepEqual(writes, [['New content typed before native ack', 8]]);
+  assert.throws(() => drafts.confirmSent('room', 'sent text', rev), /revision changed/);
+  drafts.dispose();
 });
