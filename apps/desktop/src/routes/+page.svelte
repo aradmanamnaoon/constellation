@@ -554,6 +554,13 @@
       notice = draftCleared
         ? 'Message saved locally. Choose a provider and use Ask selected or Ask team to request a reply.'
         : 'Message saved, but its composer draft could not be cleared. Review saved text before resending after restart.';
+      // The success banner changes available transcript height after refresh.
+      // Re-anchor only the room whose message was just saved, after the
+      // banner/composer reflow, so the new message is actually visible.
+      if (roomId === targetRoomId && !messageQuery.trim() && messagePage === 0) {
+        await tick();
+        scrollChatToBottom();
+      }
     } catch (cause) {
       error = persisted ? `Message was saved, but the room could not refresh: ${String(cause)}` : `Could not confirm the message was saved: ${String(cause)}. Retrying the same text in this session will reuse its operation ID.`;
       if (!persisted && roomId === targetRoomId) draft = content;
@@ -2369,7 +2376,7 @@
           </div>
         {:else}
           <div class="chat-scroll" bind:this={chatScrollElement} onscroll={chatScrollChanged} role="region" aria-label="Conversation history and search">
-            <div class="room-intro"><div class="room-intro-icon">#</div><h1>{room.name}</h1><p>{room.description || 'A space for you and your AI teammates to collaborate.'}</p><button class="soft-button small" onclick={() => (dialog = 'new-agent')}><Plus size={15}/> Add a teammate</button></div>
+            <div class="room-intro" class:compact={messages.length > 0}><div class="room-intro-icon">#</div><h1>{room.name}</h1><p>{room.description || 'A space for you and your AI teammates to collaborate.'}</p><button class="soft-button small" onclick={() => (dialog = 'new-agent')}><Plus size={15}/> Add a teammate</button></div>
             <div class="message-search-bar">
               <label for="conversation-message-search">Search this conversation</label>
               <input id="conversation-message-search" type="search" bind:value={messageQuery} oninput={() => (messagePage = 0)} placeholder="Find messages by text or sender…" autocomplete="off" />

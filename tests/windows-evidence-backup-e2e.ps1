@@ -1738,7 +1738,20 @@ try {
       } while ([DateTime]::UtcNow -lt $until)
       if ($observed -cne $text) { throw 'Reopened native composer did not recover exact unsent draft text.' }
       $result.screenshots += Capture-Window $hwnd 'draft-recovered-after-restart'
-      $result.draft_status = 'pass_native_unsent_draft_recovered_exact_after_restart'
+      # This is a local-save-only button. It must never issue a provider call.
+      Ui-Invoke (Ui-WaitEnabled $root 'Save message locally' 8)
+      if ($null -eq (Ui-Wait $root '1 messages' '' 8)) {
+        throw 'Locally sent draft did not appear as exactly one saved room message.'
+      }
+      $clearedComposer = Ui-Wait $root 'Write a local message' '' 8
+      $clearedPattern = $null
+      if ($null -eq $clearedComposer -or
+          -not $clearedComposer.Element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$clearedPattern) -or
+          [string]([Windows.Automation.ValuePattern]$clearedPattern).Current.Value -cne '') {
+        throw 'After saving the recovered message, its composer must visibly clear without making any provider request.'
+      }
+      $result.screenshots += Capture-Window $hwnd 'draft-locally-sent-compact-room'
+      $result.draft_status = 'pass_native_unsent_draft_recovered_exact_after_restart_and_locally_sent'
     } catch {
       $result.draft_status = 'blocked_or_failed_private_native_draft_reopen'
       $result.blockers += "Unsent draft: $($_.Exception.Message)"
@@ -1810,4 +1823,4 @@ if ($TestWorkflowStep -and ($result.workflow_step_status -ne 'pass_one_loopback_
 if ($TestWorkflowReport -and $result.workflow_report_status -ne 'pass_native_markdown_rendered_and_checked_without_clipboard') { exit 1 }
 if ($TestFileTools -and $result.file_tool_status -ne 'pass_denial_create_read_no_clobber_journal') { exit 1 }
 if ($TestNativeConsent -and $result.native_consent_status -ne 'pass_sha_bound_read_no_create_read_no_clobber_and_read_mutation') { exit 1 }
-if ($TestDrafts -and $result.draft_status -ne 'pass_native_unsent_draft_recovered_exact_after_restart') { exit 1 }
+if ($TestDrafts -and $result.draft_status -ne 'pass_native_unsent_draft_recovered_exact_after_restart_and_locally_sent') { exit 1 }
