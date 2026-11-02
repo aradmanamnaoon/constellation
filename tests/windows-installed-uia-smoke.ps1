@@ -517,6 +517,15 @@ db.close();
       if ($vp.Current.IsReadOnly) { throw "Provider input is read-only: '$name'." }
       $vp.SetValue($value)
     }
+    function Assert-ProviderValue([string]$name, [string]$expected) {
+      $input = Find-ProviderControl $name 'ControlType.Edit'
+      $pattern = $null
+      if (-not $input.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+        throw "Provider input does not expose readable ValuePattern: '$name'."
+      }
+      $actual = ([System.Windows.Automation.ValuePattern]$pattern).Current.Value
+      if ($actual -cne $expected) { throw "Provider revision did not prefill '$name' correctly." }
+    }
     # Save only a dummy loopback profile in this private database. No key,
     # probe, model request, external connection or credentials are used.
     Invoke-ProviderControl 'Settings'
@@ -531,7 +540,21 @@ db.close();
     [void](Find-ProviderControl 'No providers match these local filters. Clear the search or choose All.')
     Set-ProviderValue 'Find a provider' 'qa-disabled-model'
     [void](Find-ProviderControl 'QA isolated local model')
-    $result.provider_directory_result = 'passed: local dummy profile saved, native UIA search matches and no-match state, no network action'
+    # Revise opens the existing public configuration only. Do not submit,
+    # probe or retrieve API keys from the OS credential manager.
+    Invoke-ProviderControl 'Revise configuration for QA isolated local model'
+    [void](Find-ProviderControl 'Revise a connection.')
+    [void](Find-ProviderControl 'Save revised configuration')
+    Assert-ProviderValue 'DISPLAY NAME' 'QA isolated local model'
+    Assert-ProviderValue 'MODEL IDENTIFIER' 'qa-disabled-model'
+    Assert-ProviderValue 'API BASE URL' 'http://127.0.0.1:11434/v1'
+    # A changed public identity creates a second local profile. Never
+    # overwrite or erase the original, copy a secret or make a model call.
+    Set-ProviderValue 'DISPLAY NAME' 'QA revised isolated model'
+    Invoke-ProviderControl 'Save revised configuration'
+    [void](Find-ProviderControl 'QA isolated local model')
+    [void](Find-ProviderControl 'QA revised isolated model')
+    $result.provider_directory_result = 'passed: dummy provider persisted; local search positive/negative; safe revision prefilled metadata and created separate profile without probes or key access'
   }
 
   $rect = New-Object ConstellationInstalledWin32+Rect

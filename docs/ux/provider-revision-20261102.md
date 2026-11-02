@@ -1,0 +1,11 @@
+# Provider configuration revision — security and UX contract
+
+**Date:** 2026-11-02. **Scope:** local provider-management UX on the isolated `ux/competitor-rebuild-20261101` branch. Not a network provider test or a release.
+
+The Settings provider directory now offers **Revise** next to each configured connection. It opens a form prefilled with public display name, transport format, endpoint and model. Existing provider IDs are used solely as UI source references; the form never retrieves a credential from OS keyring, stores a key in markup, or copies any credential reference.
+
+Native `studio_save_provider` retains its existing storage rules: an *identical* provider configuration reuses that profile ID, while changing one or more identity fields (name/endpoint/model/API format) creates a new profile, leaving the old profile and its agent/task references available. This is **not in-place mutation/deletion**. The UI describes the behavior before Save. Separate provider retirement/deletion and reassignment remain unimplemented and must not be claimed as done.
+
+On opening Revise, the API-key field and Remember checkbox start empty and unchecked. For a provider that records a remembered OS credential, a replacement key is required before Save is enabled, avoiding accidental deletion of its existing key through an empty credential submission. The user must select Remember again to keep the replacement persistent; otherwise it becomes session-only. For an unremembered profile, the UI warns that resaving identical settings with no key clears its previous session-only credential. Changing the endpoint clears the entered key **and the opt-in Remember setting**. No provider test or HTTP call occurs on opening, editing or saving the form.
+
+Pure tests in `tests/provider-revision-ux.test.mjs` cover the no-secret draft contract and form wiring. Native/private Windows GUI evidence belongs in `docs/ux/qa-results-2026-11-02.md` when the new executable is tested. Passing static tests never proves the native UI or credential-manager behavior. Remaining provider lifecycle capabilities (true in-place edit, delete/retire, reference reassignment, secured credential rotation negative tests) are open.

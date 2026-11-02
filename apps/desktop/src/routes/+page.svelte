@@ -14,6 +14,7 @@
   import { filterRoleLibrary, roleCategories } from '../lib/role-library';
   import { splitChatBlocks } from '../lib/chat-format';
   import { filterProviderDirectory, type ProviderStatusFilter } from '../lib/provider-directory';
+  import { prepareProviderRevision } from '../lib/provider-revision';
   import './studio.css';
 
   type Screen = 'home' | 'rooms' | 'tasks' | 'evidence' | 'library' | 'settings';
@@ -139,6 +140,8 @@
   let providerModel = $state('');
   let providerKey = $state('');
   let providerRememberKey = $state(false);
+  let providerRevisionSourceId = $state('');
+  let providerRevisionSavedKey = $state(false);
   let probeBusyId = $state('');
   let probeResults = $state<Record<string, ProviderProbe | { status: 'request_error'; message: string }>>({});
   let providerSearch = $state('');
@@ -639,6 +642,26 @@
     providerModel = '';
     providerKey = '';
     providerRememberKey = false;
+    providerRevisionSourceId = '';
+    providerRevisionSavedKey = false;
+    dialog = 'provider';
+  }
+
+  function openProviderRevision(profile: Provider) {
+    const template = prepareProviderRevision(profile);
+    // The dialog never retrieves, copies or reveals any existing API secret.
+    if (!Object.prototype.hasOwnProperty.call(providerPresets, template.kind)) {
+      error = 'This legacy provider format cannot be revised with the current form.';
+      return;
+    }
+    providerRevisionSourceId = template.sourceId;
+    providerRevisionSavedKey = template.sourceRememberedKey;
+    providerName = template.name;
+    providerKind = template.kind as ProviderKind;
+    providerEndpoint = template.endpoint;
+    providerModel = template.model;
+    providerKey = template.key;
+    providerRememberKey = template.rememberKey;
     dialog = 'provider';
   }
 
@@ -646,6 +669,8 @@
     if (dialog === 'provider') {
       providerKey = '';
       providerRememberKey = false;
+      providerRevisionSourceId = '';
+      providerRevisionSavedKey = false;
     }
     dialog = null;
     taskSetupReturn = null;
@@ -1854,6 +1879,10 @@
 
   async function saveProvider() {
     if (!isNative || working || !providerName.trim() || !providerEndpoint.trim() || !providerModel.trim()) return;
+    if (providerRevisionSourceId && providerRevisionSavedKey && !providerKey.trim()) {
+      error = 'This connection has a remembered key. Enter a replacement API key before saving a revision, or close the dialog without changing it.';
+      return;
+    }
     if (providerRememberKey && !providerKey.trim()) {
       error = 'Enter an API key before choosing secure OS credential storage.';
       return;
@@ -1869,10 +1898,14 @@
       providerRememberKey = false;
       // A previous probe is invalid after profile or in-memory key changes.
       probeResults = {};
+      const wasRevision = !!providerRevisionSourceId;
       await refresh(); dialog = null;
+      providerRevisionSourceId = '';
+      providerRevisionSavedKey = false;
       notice = persistInOs
         ? `${providerPreset.label} saved. Its API key was stored in this operating system account's credential manager; no model request was sent.`
         : `${providerPreset.label} profile saved locally. No request was sent; any API key is session-only and may need re-entry after restart.`;
+      if (wasRevision) notice += ' If endpoint, name, model or format changed, the original profile remains available until separately retired.';
     } catch (cause) { error = String(cause); }
     finally { working = false; }
   }
@@ -2737,7 +2770,10 @@
             <div class="provider-row">
               <div class="provider-symbol"><Cpu size={18}/></div>
               <div><strong>{provider.name}</strong><span>{providerKindLabel(provider.kind)} · {provider.model}</span><span class="provider-endpoint" title={provider.endpoint}>{provider.endpoint}</span><span>{provider.remembered_key ? 'API key reference saved in OS credential manager' : 'No persistent API key in this profile'}</span><span class="provider-verification">{result?.status === 'compatible_text' ? 'Text test passed in this session only' : result ? 'Text test needs attention' : 'Not tested in this session'}</span></div>
-              <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} onclick={() => void testProvider(provider.id)}>{probeBusyId === provider.id ? 'Testing…' : 'Test text chat'}</button>
+              <div class="provider-actions">
+                <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} aria-label={'Revise configuration for ' + provider.name} onclick={() => openProviderRevision(provider)}>Revise</button>
+                <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} onclick={() => void testProvider(provider.id)}>{probeBusyId === provider.id ? 'Testing…' : 'Test text chat'}</button>
+              </div>
             </div>
             {#if result}
               <p class="provider-probe-result" role="status">Text-only test: {result.status === 'compatible_text' ? 'Compatible for this one response' : result.status === 'request_error' ? result.message : result.status.replaceAll('_', ' ')}{#if 'http_status' in result && result.http_status} · HTTP {result.http_status}{/if}. No tool or streaming support was verified.</p>
@@ -2831,8 +2867,11 @@
         {/if}
         <form onsubmit={(event) => {event.preventDefault();void createTask();}}><label>ROOM<select bind:value={taskRoomId} required>{#each snapshot.rooms as r (r.id)}<option value={r.id}>{r.name}</option>{/each}</select></label><label>TEAMMATE<select bind:value={taskAgentId} required>{#each snapshot.agents as agent (agent.id)}<option value={agent.id}>{agent.name} — {agent.role}</option>{/each}</select></label><label>INSTRUCTIONS<textarea bind:value={taskInstructions} rows="4" maxlength="10000" required placeholder="Describe the outcome you want..."></textarea></label><button class="primary-button full" type="submit" disabled={!isNative || working || !taskRoomId || !taskAgentId || !taskInstructions.trim()}>Save pending task <ArrowRight size={17}/></button></form>
       {:else if dialog === 'provider'}
-        <h2>Bring your own model.</h2>
-        <p>Choose the API format this provider actually supports. Saving a connection does not contact the provider or send messages.</p>
+        <h2>{providerRevisionSourceId ? 'Revise a connection.' : 'Bring your own model.'}</h2>
+        <p>{providerRevisionSourceId ? 'Review this saved configuration. Keys are never shown or copied. Unchanged profile details reuse the original connection; changing its name, model, endpoint or API format creates a separate profile and leaves the original intact.' : 'Choose the API format this provider actually supports. Saving a connection does not contact the provider or send messages.'}</p>
+        {#if providerRevisionSourceId}
+          <p class="provider-revision-note" role="note">{providerRevisionSavedKey ? 'This profile has a securely remembered credential. Re-enter a replacement key before saving; leave this dialog to retain the existing credential unchanged.' : 'Enter the API key again if the connection needs one. Saving without a key clears an existing session-only key when all other profile details match.'} No provider request is sent by saving.</p>
+        {/if}
         <form onsubmit={(event) => {event.preventDefault();void saveProvider();}}>
           <label for="provider-kind">API FORMAT
             <select id="provider-kind" value={providerKind} disabled={working} onchange={(event) => chooseProviderKind(event.currentTarget.value as ProviderKind)}>
@@ -2841,7 +2880,7 @@
           </label>
           <p id="provider-kind-help" class="provider-kind-help" aria-live="polite">{providerPreset.detail}</p>
           <label for="provider-name">DISPLAY NAME<input id="provider-name" bind:value={providerName} maxlength="120" autocomplete="off" required /></label>
-          <label for="provider-endpoint">API BASE URL<input id="provider-endpoint" type="url" value={providerEndpoint} oninput={(event) => { providerEndpoint = event.currentTarget.value; providerKey = ''; }} placeholder={providerPreset.endpoint} spellcheck="false" autocapitalize="off" autocomplete="off" required /></label>
+          <label for="provider-endpoint">API BASE URL<input id="provider-endpoint" type="url" value={providerEndpoint} oninput={(event) => { providerEndpoint = event.currentTarget.value; providerKey = ''; providerRememberKey = false; }} placeholder={providerPreset.endpoint} spellcheck="false" autocapitalize="off" autocomplete="off" required /></label>
           <p class="provider-field-hint">The URL is a base URL, not a full request path. Remote connections require HTTPS; HTTP is permitted only for localhost.</p>
           <label for="provider-model">MODEL IDENTIFIER<input id="provider-model" bind:value={providerModel} placeholder={providerPreset.modelHint} spellcheck="false" autocapitalize="off" autocomplete="off" required /></label>
           <label for="provider-key">API KEY {providerKind === 'ollama_native' ? '(USUALLY NOT NEEDED LOCALLY)' : '(IF REQUIRED BY PROVIDER)'}
@@ -2849,7 +2888,7 @@
           </label>
           <label class="provider-remember"><input type="checkbox" bind:checked={providerRememberKey} disabled={!providerKey.trim() || working}/> Remember this API key in the operating system's secure credential manager</label>
           <p class="provider-field-hint">By default, keys are held only in this app session. Opt-in secure storage is available on supported Windows/macOS accounts and may be accessible to other programs running under the same account. Other platforms reject the request without a plaintext fallback. Do not put keys in the URL; switching API formats clears the entered key.</p>
-          <button class="primary-button full" disabled={working || !providerName.trim() || !providerEndpoint.trim() || !providerModel.trim() || !isNative} type="submit">Save connection locally <ArrowRight size={17}/></button>
+          <button class="primary-button full" disabled={working || !providerName.trim() || !providerEndpoint.trim() || !providerModel.trim() || !isNative || (providerRevisionSourceId !== '' && providerRevisionSavedKey && !providerKey.trim())} type="submit">{providerRevisionSourceId ? 'Save revised configuration' : 'Save connection locally'} <ArrowRight size={17}/></button>
         </form>
         <p class="dialog-footnote"><ShieldCheck size={14}/> Provider compatibility is not guaranteed. Only explicit Ask, Run, or Test actions can send model requests; remote services may charge.</p>
       {:else}

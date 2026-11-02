@@ -372,6 +372,8 @@ h1,h2 { font-family:'Segoe UI', system-ui, sans-serif; }
 .provider-directory-controls select { flex:0 1 210px; }
 .provider-directory-controls span { color:var(--color-text-muted); font-size:11px; }
 .provider-row .provider-verification { white-space:normal; overflow-wrap:anywhere; }
+.provider-actions { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
+.provider-revision-note { padding:11px 12px; border:1px solid var(--color-border); border-radius:9px; background:var(--color-surface-alt); color:var(--color-text); font-size:11px; line-height:1.55; }
 .library-page { padding-top:56px; }
 .library-page h1 { margin-bottom:12px; }
 .searchbox { display:flex; gap:10px; align-items:center; border:1px solid var(--color-border); background:var(--color-surface-alt); border-radius:12px; padding:0 14px; max-width:525px; height:45px; color:var(--color-text); margin-bottom:30px; }
@@ -538,7 +540,7 @@ kbd { background:var(--color-surface-tint); padding:3px 6px; border-radius:5px; 
   .studio .command-dialog .workspace-command-results button { min-height:41px; padding:5px 9px; }
   .studio .command-dialog .workspace-command-palette .workspace-command-footer { padding-top:4px; margin-top:4px; font-size:10px; }
 }
-@media(max-width:520px) { .provider-row{align-items:flex-start;flex-wrap:wrap;}.provider-row > div:nth-child(2){flex-basis:calc(100% - 52px);}.provider-row > button{margin-left:49px;}.modal .provider-kind-help{font-size:11px;}.modal .provider-field-hint{font-size:10px;} }
+@media(max-width:520px) { .provider-row{align-items:flex-start;flex-wrap:wrap;}.provider-row > div:nth-child(2){flex-basis:calc(100% - 52px);}.provider-actions{margin-inline-start:49px;}.modal .provider-kind-help{font-size:11px;}.modal .provider-field-hint{font-size:10px;} }
 @media(max-width:520px) { .evidence-form{padding:14px;}.evidence-search-row{flex-direction:column;align-items:stretch;}.evidence-search-row .primary-button{width:100%;}.evidence-search-row input{width:100%;}.evidence-hit{padding:13px;}.evidence-form-footer button{width:100%;}.backup-form button[type="submit"]{width:100%;white-space:normal;text-align:center;} }
 @media(max-width:640px) { .workflow-build-header,.workflow-step-selects{grid-template-columns:1fr;}.workflow-builder{padding:15px;}.workflow-actions button{flex:1;white-space:normal;}.workflow-saved-heading{align-items:flex-start;} }
 /* An off-canvas navigation must not remain in the keyboard tab sequence. */
