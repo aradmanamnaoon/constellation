@@ -806,6 +806,51 @@ impl StudioStore {
         Ok(())
     }
 
+    /// Retire only the credential reference, not the provider's historical
+    /// identity. The native host separately deletes the OS vault entry first.
+    /// CAS prevents a stale settings window from silently modifying a revised
+    /// provider, and the existing immutable event ledger records the change.
+    pub fn forget_remembered_provider_credential(
+        &self,
+        expected: ProviderProfile,
+        operation_id: OperationId,
+    ) -> Result<()> {
+        expected.validate()?;
+        if !matches!(expected.credentials, CredentialSource::OsKeyring { .. }) {
+            return Err(CoreError::InvalidInput(
+                "the expected provider must have an OS-stored credential".into(),
+            ));
+        }
+        let mut retired = expected.clone();
+        retired.credentials = CredentialSource::None;
+        let fingerprint = json!({"op":"forget_remembered_provider_credential","expected":expected});
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if previous_result::<ProviderProfile>(&tx, operation_id, &fingerprint)?.is_some() {
+            return Ok(());
+        }
+        let current: ProviderProfile = read_one(&tx, "providers", &expected.id.to_string())?
+            .ok_or(CoreError::NotFound("provider"))?;
+        if current != expected {
+            return Err(CoreError::OperationConflict);
+        }
+        tx.execute(
+            "UPDATE providers SET data=?1 WHERE id=?2",
+            params![serde_json::to_string(&retired)?, retired.id.to_string()],
+        )?;
+        record_event(
+            &tx,
+            operation_id,
+            &fingerprint,
+            EventKind::ProviderSaved {
+                provider_id: retired.id,
+            },
+            &retired,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn create_task(
         &self,
         room_id: RoomId,
@@ -1292,6 +1337,54 @@ mod historical_schema_startup_tests {
         assert!(matches!(
             StudioStore::open(&path),
             Err(CoreError::UnrecognizedSchema)
+        ));
+    }
+
+    #[test]
+    fn forgotten_credential_preserves_provider_identity_and_rejects_stale_profile() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = StudioStore::open(directory.path().join("provider.sqlite3")).unwrap();
+        let provider_id = ProviderId::new();
+        let previous = ProviderProfile {
+            id: provider_id,
+            display_name: "Test provider".into(),
+            model_id: "test-model".into(),
+            base_url: "https://example.com/v1".into(),
+            kind: Default::default(),
+            credentials: CredentialSource::OsKeyring {
+                service: "test-vault".into(),
+                account: provider_id.to_string(),
+            },
+        };
+        store.save_provider_profile(previous.clone()).unwrap();
+        let stale = ProviderProfile {
+            display_name: "wrong identity".into(),
+            ..previous.clone()
+        };
+        assert!(matches!(
+            store.forget_remembered_provider_credential(stale, OperationId::new()),
+            Err(CoreError::OperationConflict)
+        ));
+        let operation = OperationId::new();
+        store
+            .forget_remembered_provider_credential(previous.clone(), operation)
+            .unwrap();
+        store
+            .forget_remembered_provider_credential(previous.clone(), operation)
+            .unwrap();
+        let saved = store
+            .snapshot()
+            .unwrap()
+            .providers
+            .into_iter()
+            .find(|provider| provider.id == provider_id)
+            .unwrap();
+        assert_eq!(saved.credentials, CredentialSource::None);
+        assert_eq!(saved.display_name, previous.display_name);
+        assert_eq!(saved.model_id, previous.model_id);
+        assert!(matches!(
+            store.forget_remembered_provider_credential(previous, OperationId::new()),
+            Err(CoreError::OperationConflict)
         ));
     }
 }

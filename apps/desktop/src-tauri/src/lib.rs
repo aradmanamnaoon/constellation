@@ -2243,6 +2243,81 @@ fn studio_remove_unused_provider(
     Ok(())
 }
 
+/// Explicitly forget a remembered OS key while retaining provider identity,
+/// agent assignments, saved messages and immutable workflow provenance. This
+/// operation does not contact the model or execute any pending task.
+#[tauri::command]
+fn studio_forget_remembered_provider_key(
+    state: State<'_, StudioState>,
+    provider_id: String,
+    expected_name: String,
+    expected_endpoint: String,
+    expected_model: String,
+    expected_kind: ProviderKind,
+    confirmed_name: String,
+) -> Result<(), String> {
+    let provider_id: ProviderId = provider_id.parse().map_err(|_| "Invalid provider ID")?;
+    if expected_name != confirmed_name {
+        return Err(
+            "Confirm the exact provider name before forgetting its saved credential".into(),
+        );
+    }
+    let expected = ProviderProfile {
+        id: provider_id,
+        display_name: expected_name,
+        base_url: expected_endpoint,
+        model_id: expected_model,
+        kind: expected_kind,
+        credentials: CredentialSource::OsKeyring {
+            service: CREDENTIAL_SERVICE.into(),
+            account: provider_id.to_string(),
+        },
+    };
+    expected.validate().map_err(err)?;
+    let _task_gate = state
+        .task_tool_boundary
+        .lock()
+        .map_err(|_| "Task authorization lock is unavailable")?;
+    if !state
+        .generating_rooms
+        .lock()
+        .map_err(|_| "Active response status is unavailable")?
+        .is_empty()
+    {
+        return Err("Wait for active responses to finish before forgetting this credential".into());
+    }
+    // A stale renderer may not delete another profile's credential. Compare
+    // the complete native record before opening OS credential storage.
+    let current = state
+        .store
+        .snapshot()
+        .map_err(err)?
+        .providers
+        .into_iter()
+        .find(|profile| profile.id == provider_id)
+        .ok_or("Provider not configured")?;
+    if current != expected {
+        return Err("Provider changed or no longer has the expected remembered key".into());
+    }
+    let vault_key = ProviderKey::new(provider_id.0).map_err(|_| "Invalid provider ID")?;
+    // Missing is safe: a prior interrupted attempt may have deleted the key
+    // before its profile transaction committed. All other errors fail closed.
+    match Vault.delete(vault_key) {
+        Ok(()) | Err(VaultError::NotFound) => {}
+        Err(_) => {
+            return Err("Could not remove saved API key from the OS credential manager".into());
+        }
+    }
+    state.store.forget_remembered_provider_credential(expected, OperationId::new())
+        .map_err(|_| "The key was removed, but the provider profile changed or could not be updated. Restart settings before using this connection".to_string())?;
+    state
+        .session_keys
+        .lock()
+        .map_err(|_| "credential lock poisoned")?
+        .remove(&provider_id);
+    Ok(())
+}
+
 /// One user-initiated compatibility probe. Uses the requested provider's
 /// exact configured endpoint and credential; never probes on startup.
 /// It may incur a small API request charge. This does not assert tool calling,
@@ -4476,6 +4551,7 @@ pub fn run() {
             studio_send_message,
             studio_save_provider,
             studio_remove_unused_provider,
+            studio_forget_remembered_provider_key,
             studio_probe_provider,
             studio_generate_reply,
             studio_generate_team_replies,

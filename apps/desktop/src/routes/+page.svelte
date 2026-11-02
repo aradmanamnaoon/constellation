@@ -158,6 +158,8 @@
   let providerRevisionSourceId = $state('');
   let providerRevisionSavedKey = $state(false);
   let providerRemovalCandidate = $state('');
+  let providerForgetCandidate = $state('');
+  let providerForgetConfirmation = $state('');
   let probeBusyId = $state('');
   let probeResults = $state<Record<string, ProviderProbe | { status: 'request_error'; message: string }>>({});
   let providerSearch = $state('');
@@ -2146,6 +2148,31 @@
       error = 'Removal was denied. The connection may have changed or still be referenced by an agent, a task, a message, a workflow or stored credentials. Nothing was removed; check your assignments and history.';
     } finally { working = false; }
   }
+  async function forgetRememberedProviderKey(provider: Provider) {
+    if (!isNative || working || replyBusy || workflowBusy || !!probeBusyId ||
+        !provider.remembered_key || providerForgetCandidate !== provider.id ||
+        providerForgetConfirmation !== provider.name) return;
+    working = true; error = '';
+    try {
+      await invoke('studio_forget_remembered_provider_key', {
+        providerId: provider.id,
+        expectedName: provider.name,
+        expectedEndpoint: provider.endpoint,
+        expectedModel: provider.model,
+        expectedKind: provider.kind ?? 'openai_chat',
+        confirmedName: providerForgetConfirmation,
+      });
+      providerForgetCandidate = '';
+      providerForgetConfirmation = '';
+      const results = { ...probeResults }; delete results[provider.id]; probeResults = results;
+      await refresh();
+      notice = 'Saved API key deleted from the operating system credential manager. Connection identity and history were preserved. Enter a new key to request further replies.';
+    } catch {
+      providerForgetCandidate = '';
+      providerForgetConfirmation = '';
+      error = 'Could not verify key deletion and profile update. No request was sent. Reopen Settings to inspect the current credential status before using this provider.';
+    } finally { working = false; }
+  }
 
   function openTaskDialog(preferredRoomId?: string) {
     taskSetupReturn = null;
@@ -3043,6 +3070,8 @@
                 <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} onclick={() => void testProvider(provider.id)}>{probeBusyId === provider.id ? 'Testing…' : 'Test text chat'}</button>
                 {#if !provider.remembered_key}
                   <button type="button" class="text-button" disabled={!isNative || working || replyBusy || workflowBusy || !!probeBusyId} aria-label={'Remove unused connection ' + provider.name} onclick={() => (providerRemovalCandidate = providerRemovalCandidate === provider.id ? '' : provider.id)}>Remove unused</button>
+                {:else}
+                  <button type="button" class="text-button" disabled={!isNative || working || replyBusy || workflowBusy || !!probeBusyId} aria-label={'Forget stored API key for ' + provider.name} onclick={() => { providerForgetCandidate = providerForgetCandidate === provider.id ? '' : provider.id; providerForgetConfirmation = ''; }}>Forget saved key</button>
                 {/if}
               </div>
             </div>
@@ -3051,6 +3080,16 @@
                 <p>Remove <strong>{provider.name}</strong> from this device? Only credential-free connections with no agent assignments, messages, tasks or saved workflows can be removed. The app will reject referenced or changed profiles. This cannot undo historical exports.</p>
                 <button type="button" class="soft-button small" onclick={() => (providerRemovalCandidate = '')}>Keep connection</button>
                 <button type="button" class="soft-button small" disabled={!isNative || working || replyBusy || workflowBusy || !!probeBusyId} onclick={() => void removeUnusedProvider(provider)}>Confirm remove unused</button>
+              </div>
+            {/if}
+            {#if providerForgetCandidate === provider.id}
+              <div class="provider-remove-confirm" role="group" aria-label={'Confirm forgetting stored API key for ' + provider.name}>
+                <p>Delete the API key for <strong>{provider.name}</strong> from this operating system account? The provider profile, assigned agents, tasks, messages and workflow history will stay. New requests will need another key. Already-running requests may still complete; wait until they finish.</p>
+                <label>Type the exact connection name to confirm
+                  <input aria-label={'Confirm provider name ' + provider.name} type="text" autocomplete="off" spellcheck="false" bind:value={providerForgetConfirmation} />
+                </label>
+                <button type="button" class="soft-button small" onclick={() => { providerForgetCandidate = ''; providerForgetConfirmation = ''; }}>Keep saved key</button>
+                <button type="button" class="soft-button small" disabled={!isNative || working || replyBusy || workflowBusy || !!probeBusyId || providerForgetConfirmation !== provider.name} onclick={() => void forgetRememberedProviderKey(provider)}>Delete saved API key</button>
               </div>
             {/if}
             {#if result}
