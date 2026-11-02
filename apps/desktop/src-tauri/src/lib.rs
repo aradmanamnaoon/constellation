@@ -719,6 +719,19 @@ fn studio_set_ui_zoom(window: tauri::WebviewWindow, percent: u16) -> Result<u16,
 
 fn snapshot_as_view(store: &StudioStore) -> Result<Value, String> {
     let snapshot = store.snapshot().map_err(err)?;
+    Ok(snapshot_to_view(&snapshot))
+}
+
+// A large room can have thousands of messages and hundreds of agents.
+// Construct sender identities once rather than scanning every agent for each
+// message. Do not rewrite historical agent IDs or imply a missing sender is
+// still configured: old messages retain the existing "Agent" fallback.
+fn snapshot_to_view(snapshot: &StudioSnapshot) -> Value {
+    let agent_names = snapshot
+        .agents
+        .iter()
+        .map(|agent| (agent.id, agent.name.as_str()))
+        .collect::<HashMap<_, _>>();
     let agents = snapshot
         .agents
         .iter()
@@ -743,11 +756,7 @@ fn snapshot_as_view(store: &StudioStore) -> Result<Value, String> {
                 MessageSender::System => ("system", "System".to_string()),
                 MessageSender::Agent(id) => (
                     "agent",
-                    snapshot
-                        .agents
-                        .iter()
-                        .find(|a| a.id == id)
-                        .map_or_else(|| "Agent".to_string(), |a| a.name.clone()),
+                    agent_names.get(&id).copied().unwrap_or("Agent").to_string(),
                 ),
             };
             json!({
@@ -780,9 +789,7 @@ fn snapshot_as_view(store: &StudioStore) -> Result<Value, String> {
             })
         })
         .collect::<Vec<_>>();
-    Ok(
-        json!({"rooms": rooms, "agents":agents, "messages":messages, "providers":providers, "tasks":tasks}),
-    )
+    json!({"rooms": rooms, "agents":agents, "messages":messages, "providers":providers, "tasks":tasks})
 }
 
 #[tauri::command]
@@ -4623,6 +4630,62 @@ mod tests {
     use super::*;
     use constellation_core::MessageSender;
     use sha2::Digest;
+
+    #[test]
+    fn large_snapshot_preserves_ten_thousand_ordered_messages_and_sender_identity() {
+        let room = RoomId::new();
+        let agents = (0..200)
+            .map(|index| Agent {
+                id: AgentId::new(),
+                name: format!("Team member {index}"),
+                role: "Researcher".into(),
+                provider_id: None,
+                created_at_ms: index,
+            })
+            .collect::<Vec<_>>();
+        let messages = (0..10_000)
+            .map(|index| constellation_core::Message {
+                id: MessageId::new(),
+                room_id: room,
+                sender: MessageSender::Agent(agents[index % agents.len()].id),
+                content: format!("Local message {index}; no provider request"),
+                created_at_ms: index as i64,
+            })
+            .collect::<Vec<_>>();
+        let snapshot = StudioSnapshot {
+            agents,
+            messages,
+            ..StudioSnapshot::default()
+        };
+        let view = snapshot_to_view(&snapshot);
+        let rendered = view["messages"].as_array().unwrap();
+        assert_eq!(rendered.len(), 10_000);
+        for index in [0, 1, 199, 200, 9_999] {
+            assert_eq!(rendered[index]["id"], json!(snapshot.messages[index].id));
+            assert_eq!(rendered[index]["body"], snapshot.messages[index].content);
+            assert_eq!(
+                rendered[index]["sender_name"],
+                snapshot.agents[index % snapshot.agents.len()].name
+            );
+        }
+        assert_eq!(view["agents"].as_array().unwrap().len(), 200);
+        assert_eq!(view["tasks"].as_array().unwrap().len(), 0);
+
+        // Historical references to removed agents must not fabricate their
+        // former identity, or prevent the timeline from being rendered.
+        let missing_sender = constellation_core::Message {
+            id: MessageId::new(),
+            room_id: room,
+            sender: MessageSender::Agent(AgentId::new()),
+            content: "orphaned historical sender".into(),
+            created_at_ms: 10_000,
+        };
+        let missing = snapshot_to_view(&StudioSnapshot {
+            messages: vec![missing_sender],
+            ..StudioSnapshot::default()
+        });
+        assert_eq!(missing["messages"][0]["sender_name"], "Agent");
+    }
 
     #[test]
     fn native_webview_zoom_accepts_only_documented_local_presets() {
