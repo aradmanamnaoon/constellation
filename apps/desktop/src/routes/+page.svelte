@@ -142,6 +142,7 @@
   let providerRememberKey = $state(false);
   let providerRevisionSourceId = $state('');
   let providerRevisionSavedKey = $state(false);
+  let providerRemovalCandidate = $state('');
   let probeBusyId = $state('');
   let probeResults = $state<Record<string, ProviderProbe | { status: 'request_error'; message: string }>>({});
   let providerSearch = $state('');
@@ -1955,6 +1956,28 @@
     }
   }
 
+  async function removeUnusedProvider(provider: Provider) {
+    if (!isNative || working || replyBusy || workflowBusy || !!probeBusyId || provider.remembered_key || providerRemovalCandidate !== provider.id) return;
+    working = true; error = '';
+    try {
+      await invoke('studio_remove_unused_provider', {
+        providerId: provider.id,
+        expectedName: provider.name,
+        expectedEndpoint: provider.endpoint,
+        expectedModel: provider.model,
+        expectedKind: provider.kind ?? 'openai_chat',
+      });
+      if (selectedProviderId === provider.id) selectedProviderId = '';
+      const results = { ...probeResults }; delete results[provider.id]; probeResults = results;
+      providerRemovalCandidate = '';
+      await refresh();
+      notice = 'Unused provider removed from this local workspace. No network request was sent.';
+    } catch {
+      providerRemovalCandidate = '';
+      error = 'Removal was denied. The connection may have changed or still be referenced by an agent, a task, a message, a workflow or stored credentials. Nothing was removed; check your assignments and history.';
+    } finally { working = false; }
+  }
+
   function openTaskDialog(preferredRoomId?: string) {
     taskSetupReturn = null;
     taskRoomId = preferredRoomId || taskFilterRoomId || roomId || snapshot.rooms[0]?.id || '';
@@ -2805,8 +2828,18 @@
               <div class="provider-actions">
                 <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} aria-label={'Revise configuration for ' + provider.name} onclick={() => openProviderRevision(provider)}>Revise</button>
                 <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} onclick={() => void testProvider(provider.id)}>{probeBusyId === provider.id ? 'Testing…' : 'Test text chat'}</button>
+                {#if !provider.remembered_key}
+                  <button type="button" class="text-button" disabled={!isNative || working || replyBusy || workflowBusy || !!probeBusyId} aria-label={'Remove unused connection ' + provider.name} onclick={() => (providerRemovalCandidate = providerRemovalCandidate === provider.id ? '' : provider.id)}>Remove unused</button>
+                {/if}
               </div>
             </div>
+            {#if providerRemovalCandidate === provider.id}
+              <div class="provider-remove-confirm" role="group" aria-label={'Confirm removal of ' + provider.name}>
+                <p>Remove <strong>{provider.name}</strong> from this device? Only credential-free connections with no agent assignments, messages, tasks or saved workflows can be removed. The app will reject referenced or changed profiles. This cannot undo historical exports.</p>
+                <button type="button" class="soft-button small" onclick={() => (providerRemovalCandidate = '')}>Keep connection</button>
+                <button type="button" class="soft-button small" disabled={!isNative || working || replyBusy || workflowBusy || !!probeBusyId} onclick={() => void removeUnusedProvider(provider)}>Confirm remove unused</button>
+              </div>
+            {/if}
             {#if result}
               <p class="provider-probe-result" role="status">Text-only test: {result.status === 'compatible_text' ? 'Compatible for this one response' : result.status === 'request_error' ? result.message : result.status.replaceAll('_', ' ')}{#if 'http_status' in result && result.http_status} · HTTP {result.http_status}{/if}. No tool or streaming support was verified.</p>
             {/if}

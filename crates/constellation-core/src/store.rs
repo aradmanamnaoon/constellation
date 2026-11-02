@@ -11,8 +11,9 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
-    Agent, AgentId, CoreError, Event, EventKind, Message, MessageId, MessageSender, OperationId,
-    ProviderId, ProviderProfile, Result, Room, RoomId, StudioSnapshot, Task, TaskId, TaskState,
+    Agent, AgentId, CoreError, CredentialSource, Event, EventKind, Message, MessageId,
+    MessageSender, OperationId, ProviderId, ProviderProfile, Result, Room, RoomId, StudioSnapshot,
+    Task, TaskId, TaskState,
 };
 
 /// SQLite-backed studio state. Every mutation and its audit event are committed
@@ -621,6 +622,68 @@ impl StudioStore {
         Ok(())
     }
 
+    /// Remove only a credential-free, completely unused local provider. The
+    /// expected public profile is checked inside the same write transaction;
+    /// no saved agent, message or task may be orphaned. Other application
+    /// stores (such as workflows) must be checked by the native caller.
+    pub fn remove_unused_provider(
+        &self,
+        expected: ProviderProfile,
+        operation_id: OperationId,
+    ) -> Result<()> {
+        expected.validate()?;
+        if expected.credentials != CredentialSource::None {
+            return Err(CoreError::InvalidInput(
+                "only profiles without stored credentials may be removed".into(),
+            ));
+        }
+        let fingerprint = json!({"op":"remove_unused_provider", "expected":expected});
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if previous_result::<ProviderProfile>(&tx, operation_id, &fingerprint)?.is_some() {
+            return Ok(());
+        }
+        let current: ProviderProfile = read_one(&tx, "providers", &expected.id.to_string())?
+            .ok_or(CoreError::NotFound("provider"))?;
+        if current != expected {
+            return Err(CoreError::OperationConflict);
+        }
+        let agents: Vec<Agent> = read_table(&tx, "agents")?;
+        if agents
+            .iter()
+            .any(|agent| agent.provider_id == Some(expected.id))
+        {
+            return Err(CoreError::InvalidInput(
+                "an agent is still assigned to this provider".into(),
+            ));
+        }
+        // A conservative retention boundary: a provider could have been used
+        // as an explicit task/message route even without a current agent
+        // preference. Require a workspace with no task/message history.
+        for table in ["tasks", "messages"] {
+            if !read_table::<serde_json::Value>(&tx, table)?.is_empty() {
+                return Err(CoreError::InvalidInput(
+                    "the workspace contains task or message history; retain this provider for provenance".into(),
+                ));
+            }
+        }
+        tx.execute(
+            "DELETE FROM providers WHERE id=?1",
+            [expected.id.to_string()],
+        )?;
+        record_event(
+            &tx,
+            operation_id,
+            &fingerprint,
+            EventKind::ProviderRemoved {
+                provider_id: expected.id,
+            },
+            &expected,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn create_task(
         &self,
         room_id: RoomId,
@@ -890,6 +953,7 @@ fn read_one<T: DeserializeOwned>(
 ) -> Result<Option<T>> {
     let sql = match table {
         "rooms" => "SELECT data FROM rooms WHERE id = ?1",
+        "providers" => "SELECT data FROM providers WHERE id = ?1",
         "tasks" => "SELECT data FROM tasks WHERE id = ?1",
         "agents" => "SELECT data FROM agents WHERE id = ?1",
         _ => return Err(CoreError::InvalidInput("unknown table".into())),

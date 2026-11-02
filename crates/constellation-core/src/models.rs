@@ -154,6 +154,9 @@ pub enum EventKind {
     ProviderSaved {
         provider_id: ProviderId,
     },
+    ProviderRemoved {
+        provider_id: ProviderId,
+    },
     TaskCreated {
         task_id: TaskId,
     },

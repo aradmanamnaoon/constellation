@@ -1064,6 +1064,12 @@ fn studio_create_workflow(
     state: State<'_, StudioState>,
     definition_json: String,
 ) -> Result<Value, String> {
+    // The local provider cleanup flow must not interleave workflow creation
+    // between its reference audit and the provider-table mutation.
+    let _task_gate = state
+        .task_tool_boundary
+        .lock()
+        .map_err(|_| "Task authorization lock is unavailable")?;
     create_workflow_plan(&state.store, &state.workflows, &definition_json)
 }
 
@@ -2129,6 +2135,60 @@ fn studio_save_provider(
             remember_key: remember_key.unwrap_or(false),
         },
     )?;
+    Ok(())
+}
+
+/// Deliberately narrow cleanup of unused, credential-free profiles. A saved
+/// model route can be an authenticated historical identity: never delete one
+/// when agents, workflows, tasks or messages might depend on it. Removing an
+/// OS-vault credential requires a distinct independently reviewed operation.
+#[tauri::command]
+fn studio_remove_unused_provider(
+    state: State<'_, StudioState>,
+    provider_id: String,
+    expected_name: String,
+    expected_endpoint: String,
+    expected_model: String,
+    expected_kind: ProviderKind,
+) -> Result<(), String> {
+    let provider_id: ProviderId = provider_id.parse().map_err(|_| "Invalid provider ID")?;
+    let expected = ProviderProfile {
+        id: provider_id,
+        display_name: expected_name,
+        base_url: expected_endpoint,
+        model_id: expected_model,
+        kind: expected_kind,
+        credentials: CredentialSource::None,
+    };
+    let _task_gate = state
+        .task_tool_boundary
+        .lock()
+        .map_err(|_| "Task authorization lock is unavailable")?;
+    if !state
+        .workflows
+        .list(1, 0)
+        .map_err(|_| "Could not verify workflow history; removal denied")?
+        .is_empty()
+    {
+        return Err("Saved workflows exist; retain this provider for provenance".into());
+    }
+    if !state
+        .generating_rooms
+        .lock()
+        .map_err(|_| "Active response status is unavailable")?
+        .is_empty()
+    {
+        return Err("Wait for active replies to finish before removing connections".into());
+    }
+    let mut keys = state
+        .session_keys
+        .lock()
+        .map_err(|_| "credential lock poisoned")?;
+    state
+        .store
+        .remove_unused_provider(expected, OperationId::new())
+        .map_err(err)?;
+    keys.remove(&provider_id);
     Ok(())
 }
 
@@ -4362,6 +4422,7 @@ pub fn run() {
             studio_set_agent_provider,
             studio_send_message,
             studio_save_provider,
+            studio_remove_unused_provider,
             studio_probe_provider,
             studio_generate_reply,
             studio_generate_team_replies,

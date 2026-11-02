@@ -213,6 +213,9 @@ h1,h2 { font-family:'Segoe UI', system-ui, sans-serif; }
 .agent-options input { accent-color:var(--color-action); margin:0; }
 .room-team-controls { display:flex; align-items:center; flex-wrap:wrap; gap:9px; padding:9px 0 3px; }
 .room-team-controls > span { flex:1 1 170px; color:var(--color-text-muted); font-size:11px; line-height:1.5; }
+.provider-remove-confirm { padding:11px 14px; margin:2px 0 13px; border:1px solid var(--color-border-strong); background:var(--color-surface-alt); border-radius:11px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.provider-remove-confirm p { flex:1 1 250px; margin:0; font-size:11px; line-height:1.6; color:var(--color-text); }
+.provider-remove-confirm button { flex:none; }
 .reply-help { margin:7px 2px 0; color:var(--color-text-muted); font-size:11px; line-height:1.5; }
 .text-button { padding:0; border:0; background:none; color:var(--color-text); font-weight:800; text-decoration:underline; }
 .reply-results { margin-top:10px; padding:11px 13px; background:var(--color-surface-alt); border:1px solid var(--color-border); border-radius:10px; font-size:11px; }

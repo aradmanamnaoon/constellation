@@ -74,6 +74,82 @@ fn room_team_members_are_durable_audited_idempotent_and_legacy_compatible() {
 }
 
 #[test]
+fn unused_credentialless_provider_removal_is_audited_exactly_once() {
+    let (temp, db) = store();
+    let provider = ProviderProfile {
+        id: ProviderId::new(),
+        display_name: "Disposable test".into(),
+        model_id: "test-model".into(),
+        base_url: "http://localhost:11434/v1".into(),
+        kind: ProviderKind::OpenaiChat,
+        credentials: CredentialSource::None,
+    };
+    db.save_provider_profile(provider.clone()).unwrap();
+    let op = OperationId::new();
+    db.remove_unused_provider(provider.clone(), op).unwrap();
+    db.remove_unused_provider(provider.clone(), op).unwrap();
+    assert!(db.snapshot().unwrap().providers.is_empty());
+    assert!(matches!(db.events().unwrap().last().unwrap().kind,
+        EventKind::ProviderRemoved { provider_id } if provider_id == provider.id));
+    assert!(matches!(
+        db.remove_unused_provider(provider.clone(), OperationId::new()),
+        Err(CoreError::NotFound("provider"))
+    ));
+    drop(db);
+    let reopened = StudioStore::open(temp.path().join("config/studio.sqlite")).unwrap();
+    assert!(reopened.snapshot().unwrap().providers.is_empty());
+}
+
+#[test]
+fn unused_provider_removal_rejects_stale_credential_and_referenced_profiles() {
+    let (_, db) = store();
+    let profile = ProviderProfile {
+        id: ProviderId::new(),
+        display_name: "Keep original".into(),
+        model_id: "test".into(),
+        base_url: "http://localhost:11434/v1".into(),
+        kind: ProviderKind::OpenaiChat,
+        credentials: CredentialSource::None,
+    };
+    db.save_provider_profile(profile.clone()).unwrap();
+    let before = db.events().unwrap().len();
+    let mut stale = profile.clone();
+    stale.model_id = "old-model".into();
+    assert!(matches!(
+        db.remove_unused_provider(stale, OperationId::new()),
+        Err(CoreError::OperationConflict)
+    ));
+    let mut secret = profile.clone();
+    secret.credentials = CredentialSource::OsKeyring {
+        service: "example".into(),
+        account: "example".into(),
+    };
+    assert!(matches!(
+        db.remove_unused_provider(secret, OperationId::new()),
+        Err(CoreError::InvalidInput(_))
+    ));
+    assert_eq!(db.events().unwrap().len(), before);
+
+    let agent = db.add_agent("Reviewer", "Researcher").unwrap();
+    db.set_agent_provider(agent.id, Some(profile.id), OperationId::new())
+        .unwrap();
+    assert!(matches!(
+        db.remove_unused_provider(profile.clone(), OperationId::new()),
+        Err(CoreError::InvalidInput(_))
+    ));
+    db.set_agent_provider(agent.id, None, OperationId::new())
+        .unwrap();
+    let room = db.create_room("Prior work").unwrap();
+    db.append_message(room.id, MessageSender::User, "Historical question")
+        .unwrap();
+    assert!(matches!(
+        db.remove_unused_provider(profile.clone(), OperationId::new()),
+        Err(CoreError::InvalidInput(_))
+    ));
+    assert_eq!(db.snapshot().unwrap().providers, vec![profile]);
+}
+
+#[test]
 fn agent_provider_preference_is_durable_validated_and_idempotent() {
     let (dir, db) = store();
     let agent = db.add_agent("Researcher", "Scout").unwrap();

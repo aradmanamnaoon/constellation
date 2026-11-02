@@ -604,7 +604,29 @@ console.log('PERSISTED_EMPTY_TEAM_AND_AUDIT_PASS');
     Invoke-ProviderControl 'Save revised configuration'
     [void](Find-ProviderControl 'QA isolated local model')
     [void](Find-ProviderControl 'QA revised isolated model')
-    $result.provider_directory_result = 'passed: dummy provider persisted; local search positive/negative; safe revision prefilled metadata and created separate profile without probes or key access'
+    # Removal is a separately confirmed, fail-closed action. This disposable
+    # test profile has no persisted credential, message, task or workflow.
+    Invoke-ProviderControl 'Remove unused connection QA revised isolated model'
+    [void](Find-ProviderControl 'Confirm removal of QA revised isolated model')
+    Invoke-ProviderControl 'Confirm remove unused'
+    [void](Find-ProviderControl 'QA isolated local model')
+    $sqlitePath = Join-Path (Join-Path $scratchRoot 'Data') 'constellation.sqlite3'
+    $readProviders = @'
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync(process.argv[2], { readOnly: true });
+const rows = db.prepare('SELECT data FROM providers').all();
+if (rows.length !== 1 || JSON.parse(rows[0].data).display_name !== 'QA isolated local model') process.exit(4);
+const removalEvents = db.prepare('SELECT kind FROM events').all()
+  .filter(({kind}) => JSON.parse(kind).type === 'provider_removed');
+db.close();
+if (removalEvents.length !== 1) process.exit(5);
+console.log('PROVIDER_REMOVAL_LOCAL_AUDIT_PASS');
+'@
+    $verified = $readProviders | node - $sqlitePath
+    if ($LASTEXITCODE -ne 0 -or [string]$verified -cne 'PROVIDER_REMOVAL_LOCAL_AUDIT_PASS') {
+      throw 'UIA removal failed to persist exactly one original provider and one audited removal.'
+    }
+    $result.provider_directory_result = 'passed: dummy provider persisted; local search positive/negative; safe revision created separate profile; explicit confirmed removal left original and one audited event without probes or key access'
   }
 
   $rect = New-Object ConstellationInstalledWin32+Rect
