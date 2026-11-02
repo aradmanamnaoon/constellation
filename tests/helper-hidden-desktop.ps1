@@ -203,6 +203,7 @@ function Invoke-ConstellationHiddenDesktopWorker {
     [switch]$SkipBackup,
     [switch]$TestProjectArchive,
     [switch]$TestWorkflows,
+    [switch]$TestDrafts,
     [switch]$TestWorkflowStep,
     [switch]$TestWorkflowReport,
     [switch]$TestFileTools,
@@ -226,6 +227,7 @@ function Invoke-ConstellationHiddenDesktopWorker {
   if ($SkipBackup) { $scriptLine += ' -SkipBackup' }
   if ($TestProjectArchive) { $scriptLine += ' -TestProjectArchive' }
   if ($TestWorkflows) { $scriptLine += ' -TestWorkflows' }
+  if ($TestDrafts) { $scriptLine += ' -TestDrafts' }
   if ($TestWorkflowStep) { $scriptLine += ' -TestWorkflowStep' }
   if ($TestWorkflowReport) { $scriptLine += ' -TestWorkflowReport' }
   if ($TestFileTools) { $scriptLine += ' -TestFileTools' }

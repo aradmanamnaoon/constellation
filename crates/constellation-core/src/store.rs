@@ -7,7 +7,7 @@ use std::{
 use rusqlite::{
     params, Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::{
@@ -20,6 +20,15 @@ use crate::{
 /// atomically. The mutex also makes this store safe to share across UI threads.
 pub struct StudioStore {
     connection: Mutex<Connection>,
+}
+
+/// Unsent text is local project data. Revisions prevent a stale editor/window
+/// from overwriting a more recent draft without explicit user intervention.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomDraft {
+    pub room_id: RoomId,
+    pub content: String,
+    pub revision: i64,
 }
 
 /// The first explicitly versioned layout is byte-for-byte compatible with
@@ -119,6 +128,14 @@ pub const EVIDENCE_LIBRARY_DDL: &str = "CREATE TABLE IF NOT EXISTS evidence_sour
            source_bytes INTEGER NOT NULL CHECK (source_bytes > 0 AND source_bytes <= 131072)
          );";
 
+/// Optional, strictly recognized extension to the project database. Keeping
+/// this in the existing file means encrypted project archives include drafts.
+pub const ROOM_DRAFT_DDL: &str = "CREATE TABLE IF NOT EXISTS room_drafts (
+           room_id TEXT PRIMARY KEY NOT NULL REFERENCES rooms(id),
+           content TEXT NOT NULL CHECK (length(CAST(content AS BLOB)) <= 131072),
+           revision INTEGER NOT NULL CHECK (revision >= 1)
+         );";
+
 type SchemaObjects = Vec<(String, String, String)>;
 
 fn schema_objects(conn: &Connection) -> Result<SchemaObjects> {
@@ -141,7 +158,12 @@ fn known_schema() -> Result<SchemaObjects> {
     schema_objects(&reference)
 }
 
-fn known_schema_with_extensions(ddl: &str, budgets: bool, evidence: bool) -> Result<SchemaObjects> {
+fn known_schema_with_extensions(
+    ddl: &str,
+    budgets: bool,
+    evidence: bool,
+    drafts: bool,
+) -> Result<SchemaObjects> {
     let reference = Connection::open_in_memory()?;
     reference.execute_batch(ddl)?;
     if budgets {
@@ -149,6 +171,9 @@ fn known_schema_with_extensions(ddl: &str, budgets: bool, evidence: bool) -> Res
     }
     if evidence {
         reference.execute_batch(EVIDENCE_LIBRARY_DDL)?;
+    }
+    if drafts {
+        reference.execute_batch(ROOM_DRAFT_DDL)?;
     }
     schema_objects(&reference)
 }
@@ -170,16 +195,19 @@ fn schema_state(conn: &Connection) -> Result<bool> {
         }
         return Ok(true); // Fresh database; create known schema atomically.
     }
-    if present == known_schema()?
-        || present == known_schema_with_extensions(STORE_SCHEMA_DDL, true, false)?
-        || present == known_schema_with_extensions(STORE_SCHEMA_DDL, false, true)?
-        || present == known_schema_with_extensions(STORE_SCHEMA_DDL, true, true)?
-        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, false, false)?
-        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, true, false)?
-        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, false, true)?
-        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, true, true)?
-    {
+    if present == known_schema()? {
         return Ok(version == 0); // Exact unversioned layout: version-only migration.
+    }
+    for ddl in [STORE_SCHEMA_DDL, STORE_LEGACY_SCHEMA_DDL] {
+        for budgets in [false, true] {
+            for evidence in [false, true] {
+                for drafts in [false, true] {
+                    if present == known_schema_with_extensions(ddl, budgets, evidence, drafts)? {
+                        return Ok(version == 0);
+                    }
+                }
+            }
+        }
     }
     Err(CoreError::UnrecognizedSchema)
 }
@@ -286,6 +314,100 @@ impl StudioStore {
         };
         tx.commit()?;
         Ok(snapshot)
+    }
+
+    /// Read persisted room drafts, including empty tombstones that retain CAS
+    /// revisions. Never infer a schema extension from table presence alone.
+    pub fn room_drafts(&self) -> Result<Vec<RoomDraft>> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        verify_initialized_schema(&tx)?;
+        let has_table: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='room_drafts')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_table {
+            return Ok(Vec::new());
+        }
+        let drafts = {
+            let mut stmt =
+                tx.prepare("SELECT room_id, content, revision FROM room_drafts ORDER BY room_id")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?;
+            rows.map(|row| {
+                let (room_id, content, revision) = row?;
+                Ok(RoomDraft {
+                    room_id: room_id.parse().map_err(|_| {
+                        CoreError::InvalidInput("invalid saved draft room ID".into())
+                    })?,
+                    content,
+                    revision,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+        };
+        tx.commit()?;
+        Ok(drafts)
+    }
+
+    /// Save a draft using optimistic concurrency. The initial expected revision
+    /// is zero. A blank draft is persisted as a tombstone to avoid ABA races.
+    pub fn save_room_draft(
+        &self,
+        room_id: RoomId,
+        content: String,
+        expected_revision: i64,
+    ) -> Result<RoomDraft> {
+        if content.len() > 131_072 || !(0..i64::MAX).contains(&expected_revision) {
+            return Err(CoreError::InvalidInput(
+                "draft size or revision is invalid".into(),
+            ));
+        }
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        verify_initialized_schema(&tx)?;
+        ensure_id(&tx, "rooms", &room_id.to_string(), "room")?;
+        let has_table: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='room_drafts')",
+            [],
+            |row| row.get(0),
+        )?;
+        let current: Option<i64> = if has_table {
+            tx.query_row(
+                "SELECT revision FROM room_drafts WHERE room_id=?1",
+                [room_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+        } else {
+            None
+        };
+        if current.unwrap_or(0) != expected_revision {
+            return Err(CoreError::InvalidInput(
+                "draft changed in another window; review before overwriting".into(),
+            ));
+        }
+        if !has_table {
+            tx.execute_batch(ROOM_DRAFT_DDL)?;
+        }
+        let revision = expected_revision + 1;
+        tx.execute(
+            "INSERT INTO room_drafts (room_id, content, revision) VALUES (?1, ?2, ?3)
+             ON CONFLICT(room_id) DO UPDATE SET content=excluded.content, revision=excluded.revision",
+            params![room_id.to_string(), content, revision],
+        )?;
+        tx.commit()?;
+        Ok(RoomDraft {
+            room_id,
+            content,
+            revision,
+        })
     }
 
     pub fn events(&self) -> Result<Vec<Event>> {
@@ -1106,5 +1228,70 @@ mod historical_schema_startup_tests {
                 0
             );
         }
+    }
+
+    #[test]
+    fn drafts_survive_reopen_and_reject_stale_window_without_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("studio.sqlite3");
+        let store = StudioStore::open(&path).unwrap();
+        let room = store.create_room("Draft test").unwrap();
+        assert!(store.room_drafts().unwrap().is_empty());
+        let first = store
+            .save_room_draft(room.id, "Unsent text 🧪".into(), 0)
+            .unwrap();
+        assert_eq!(first.revision, 1);
+        drop(store);
+
+        let reopened = StudioStore::open(&path).unwrap();
+        assert_eq!(reopened.room_drafts().unwrap(), vec![first.clone()]);
+        let latest = reopened
+            .save_room_draft(room.id, "Updated locally".into(), 1)
+            .unwrap();
+        assert_eq!(latest.revision, 2);
+        assert!(matches!(
+            reopened.save_room_draft(room.id, "stale window".into(), 1),
+            Err(CoreError::InvalidInput(_))
+        ));
+        assert_eq!(reopened.room_drafts().unwrap(), vec![latest]);
+        let empty = reopened.save_room_draft(room.id, String::new(), 2).unwrap();
+        assert_eq!(empty.revision, 3);
+        assert!(matches!(
+            reopened.save_room_draft(room.id, "resurrected".into(), 0),
+            Err(CoreError::InvalidInput(_))
+        ));
+        drop(reopened);
+        assert_eq!(
+            StudioStore::open(&path).unwrap().room_drafts().unwrap(),
+            vec![empty]
+        );
+    }
+
+    #[test]
+    fn draft_size_or_unknown_room_rejected_and_schema_remains_strict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("drafts.sqlite3");
+        let store = StudioStore::open(&path).unwrap();
+        let room = store.create_room("Safety").unwrap();
+        assert!(matches!(
+            store.save_room_draft(RoomId::new(), "oops".into(), 0),
+            Err(CoreError::NotFound("room"))
+        ));
+        assert!(store
+            .save_room_draft(room.id, "x".repeat(131_073), 0)
+            .is_err());
+        store.save_room_draft(room.id, "safe".into(), 0).unwrap();
+        drop(store);
+        let conn = Connection::open(&path).unwrap();
+        verify_initialized_schema(&conn).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER suspicious AFTER INSERT ON room_drafts BEGIN SELECT 1; END;",
+        )
+        .unwrap();
+        drop(conn);
+        assert!(matches!(
+            StudioStore::open(&path),
+            Err(CoreError::UnrecognizedSchema)
+        ));
     }
 }

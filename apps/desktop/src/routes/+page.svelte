@@ -16,6 +16,7 @@
   import { filterProviderDirectory, type ProviderStatusFilter } from '../lib/provider-directory';
   import { prepareProviderRevision } from '../lib/provider-revision';
   import { paginateLocal } from '../lib/local-pagination';
+  import { DraftPersistence, type DraftState, type StoredDraft } from '../lib/draft-persistence';
   import './studio.css';
 
   type Screen = 'home' | 'rooms' | 'tasks' | 'evidence' | 'library' | 'settings';
@@ -117,6 +118,19 @@
   let roomId = $state('');
   let draft = $state('');
   let draftsByRoom = $state<Record<string, string>>({});
+  let draftReady = $state(false);
+  let draftLoadError = $state('');
+  let draftStates = $state<Record<string, DraftState>>({});
+  let draftErrors = $state<Record<string, string>>({});
+  const draftPersistence = new DraftPersistence(
+    (id, content, expectedRevision) => invoke<StoredDraft>('studio_save_room_draft', {
+      roomId: id, content, expectedRevision,
+    }),
+    (id, status, saveError) => {
+      draftStates = { ...draftStates, [id]: status };
+      draftErrors = { ...draftErrors, [id]: saveError ?? '' };
+    },
+  );
   let pendingSendsByRoom = $state<Record<string, PendingSend>>({});
   let selectedProviderId = $state('');
   let selectedAgentsByRoom = $state<Record<string, string[]>>({});
@@ -267,6 +281,9 @@
   const messagePageSize = 100;
   let messagePage = $state(0);
   let messageQuery = $state('');
+  let chatScrollElement = $state<HTMLDivElement | null>(null);
+  let chatNearBottom = $state(true);
+  let unreadMessageCount = $state(0);
 
   const room = $derived(snapshot.rooms.find((r) => r.id === roomId));
   const messages = $derived(snapshot.messages.filter((m) => m.room_id === roomId));
@@ -345,15 +362,96 @@
     runtimeChecked = true;
     if (!isNative) return;
     try {
+      const previousRoomId = roomId;
+      const previousRoomMessageIds = new Set(snapshot.messages.filter((message) => message.room_id === previousRoomId).map((message) => message.id));
+      const stayAtBottom = chatNearBottom && messagePage === 0 && !messageQuery.trim();
+      const visibleAnchor = !stayAtBottom ? firstVisibleMessageAnchor() : null;
       const next = await invoke<Snapshot>('studio_bootstrap');
       snapshot = { ...next, tasks: next.tasks ?? [] };
       if (!next.rooms.some((r) => r.id === roomId)) selectRoom(next.rooms[0]?.id ?? '');
       if (selectedProviderId && selectedProviderId !== 'each-agent' && !next.providers.some((provider) => provider.id === selectedProviderId)) selectedProviderId = '';
       if (taskFilterRoomId && !next.rooms.some((r) => r.id === taskFilterRoomId)) taskFilterRoomId = '';
+      if (screen === 'rooms') {
+        await tick();
+        if (previousRoomId !== roomId || stayAtBottom) scrollChatToBottom();
+        else {
+          restoreMessageAnchor(visibleAnchor);
+          const added = next.messages.filter((message) => message.room_id === roomId && !previousRoomMessageIds.has(message.id)).length;
+          if (added > 0) unreadMessageCount += added;
+        }
+      }
       error = '';
     } catch (cause) {
       error = `Could not open local workspace: ${String(cause)}`;
     }
+  }
+  function chatScrollChanged(event: Event) {
+    const element = event.currentTarget as HTMLDivElement;
+    chatNearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+    if (chatNearBottom && messagePage === 0 && !messageQuery.trim()) unreadMessageCount = 0;
+  }
+  function scrollChatToBottom() {
+    if (!chatScrollElement) return;
+    chatScrollElement.scrollTop = chatScrollElement.scrollHeight;
+    chatNearBottom = true;
+    unreadMessageCount = 0;
+  }
+  function firstVisibleMessageAnchor(): { id: string; top: number } | null {
+    if (!chatScrollElement) return null;
+    const containerTop = chatScrollElement.getBoundingClientRect().top;
+    const first = [...chatScrollElement.querySelectorAll<HTMLElement>('[data-message-id]')]
+      .find((element) => element.getBoundingClientRect().bottom > containerTop + 8);
+    return first ? { id: first.dataset.messageId ?? '', top: first.getBoundingClientRect().top } : null;
+  }
+  function restoreMessageAnchor(anchor: { id: string; top: number } | null) {
+    if (!anchor || !chatScrollElement) return;
+    const visible = [...chatScrollElement.querySelectorAll<HTMLElement>('[data-message-id]')]
+      .find((element) => element.dataset.messageId === anchor.id);
+    if (visible) chatScrollElement.scrollTop += visible.getBoundingClientRect().top - anchor.top;
+  }
+  async function jumpToLatestMessage() {
+    messageQuery = '';
+    messagePage = 0;
+    await tick();
+    scrollChatToBottom();
+  }
+  async function showMessagePage(nextPage: number) {
+    messagePage = Math.max(0, Math.min(maxMessagePage, nextPage));
+    await tick();
+    chatScrollElement?.querySelector<HTMLElement>('[data-message-id]')?.scrollIntoView({ block: 'start', behavior: 'auto' });
+    chatNearBottom = false;
+  }
+  async function hydrateComposerDrafts() {
+    if (!isNative || draftReady) return;
+    try {
+      const rows = await invoke<StoredDraft[]>('studio_list_room_drafts');
+      draftPersistence.hydrate(rows);
+      draftsByRoom = Object.fromEntries(rows.map((entry) => [entry.room_id, entry.content]));
+      draft = draftsByRoom[roomId] ?? '';
+      draftReady = true;
+      draftLoadError = '';
+    } catch (cause) {
+      draftLoadError = `Could not recover saved composer drafts: ${String(cause)}. Retry before writing.`;
+    }
+  }
+  function changeComposerDraft(value: string) {
+    if (!draftReady || !roomId) return;
+    draft = value;
+    draftsByRoom = { ...draftsByRoom, [roomId]: value };
+    draftPersistence.change(roomId, value);
+  }
+  async function restoreSavedDraft() {
+    const target = roomId;
+    if (!target || busy || replyBusy) return;
+    try {
+      const rows = await invoke<StoredDraft[]>('studio_list_room_drafts');
+      const row = rows.find((item) => item.room_id === target);
+      draftPersistence.replaceFromDisk(target, row);
+      const saved = row?.content ?? '';
+      draftsByRoom = { ...draftsByRoom, [target]: saved };
+      if (roomId === target) draft = saved;
+      notice = 'Reloaded the draft saved on this device. Local unsaved changes for this room were discarded.';
+    } catch (cause) { error = `Cannot reload this draft while a save is active: ${String(cause)}`; }
   }
   function setTheme(mode: 'system' | 'light' | 'dark') {
     themeMode = mode;
@@ -368,7 +466,17 @@
       const saved = window.localStorage.getItem('constellation-appearance');
       if (saved === 'light' || saved === 'dark') setTheme(saved);
     } catch { /* Use OS appearance without browser storage. */ }
-    void refresh();
+    void (async () => { await refresh(); await hydrateComposerDrafts(); })();
+    const warnUnsaved = (event: BeforeUnloadEvent) => {
+      if (!draftPersistence.hasUnsaved()) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnUnsaved);
+    return () => {
+      window.removeEventListener('beforeunload', warnUnsaved);
+      draftPersistence.dispose();
+    };
   });
 
   async function createRoom() {
@@ -411,7 +519,7 @@
   }
 
   async function sendMessage() {
-    if (!draft.trim() || !roomId || !isNative || busy || replyBusy) return;
+    if (!draft.trim() || !roomId || !isNative || !draftReady || busy || replyBusy) return;
     const content = draft.trim();
     const targetRoomId = roomId;
     // Stable IDs let an uncertain native IPC failure be retried without
@@ -424,6 +532,9 @@
     let persisted = false;
     busy = true; error = '';
     try {
+      if (!(await draftPersistence.flush(targetRoomId))) {
+        throw new Error('Draft could not be saved locally. Resolve the draft error before sending.');
+      }
       await invoke('studio_send_message', {
         roomId: targetRoomId, content, messageId: pending.messageId, operationId: pending.operationId
       });
@@ -434,11 +545,15 @@
       if (roomId === targetRoomId && draft.trim() === content) draft = '';
       if ((draftsByRoom[targetRoomId] ?? '').trim() === content) {
         draftsByRoom = { ...draftsByRoom, [targetRoomId]: '' };
+        draftPersistence.change(targetRoomId, '', true);
       }
+      const draftCleared = await draftPersistence.flush(targetRoomId);
       await refresh();
       // Sending saves locally. External inference is a separate, explicit action.
       replyFeedbackByRoom = { ...replyFeedbackByRoom, [targetRoomId]: { providerName: '', replies: [], requestedIds: [] } };
-      notice = 'Message saved locally. Choose a provider and use Ask selected or Ask team to request a reply.';
+      notice = draftCleared
+        ? 'Message saved locally. Choose a provider and use Ask selected or Ask team to request a reply.'
+        : 'Message saved, but its composer draft could not be cleared. Review saved text before resending after restart.';
     } catch (cause) {
       error = persisted ? `Message was saved, but the room could not refresh: ${String(cause)}` : `Could not confirm the message was saved: ${String(cause)}. Retrying the same text in this session will reuse its operation ID.`;
       if (!persisted && roomId === targetRoomId) draft = content;
@@ -448,11 +563,17 @@
 
   function selectRoom(nextId: string) {
     if (nextId !== roomId) {
-      draftsByRoom = { ...draftsByRoom, [roomId]: draft };
+      if (roomId && draftReady) {
+        draftsByRoom = { ...draftsByRoom, [roomId]: draft };
+        void draftPersistence.flush(roomId);
+      }
       draft = draftsByRoom[nextId] ?? '';
       roomId = nextId;
       messagePage = 0;
       messageQuery = '';
+      unreadMessageCount = 0;
+      chatNearBottom = true;
+      void tick().then(scrollChatToBottom);
       // Explicitly reconfirm the recipient model for each new room. Keeping
       // the previous room's selected provider could export unrelated history.
       selectedProviderId = '';
@@ -2247,7 +2368,7 @@
             <div class="hero-footnote"><ShieldCheck size={15}/> Your files and tasks stay on your device unless you approve otherwise.</div>
           </div>
         {:else}
-          <div class="chat-scroll" role="region" aria-label="Conversation history and search">
+          <div class="chat-scroll" bind:this={chatScrollElement} onscroll={chatScrollChanged} role="region" aria-label="Conversation history and search">
             <div class="room-intro"><div class="room-intro-icon">#</div><h1>{room.name}</h1><p>{room.description || 'A space for you and your AI teammates to collaborate.'}</p><button class="soft-button small" onclick={() => (dialog = 'new-agent')}><Plus size={15}/> Add a teammate</button></div>
             <div class="message-search-bar">
               <label for="conversation-message-search">Search this conversation</label>
@@ -2255,16 +2376,19 @@
               {#if messageQuery}<button type="button" class="soft-button small" onclick={() => { messageQuery = ''; messagePage = 0; }}>Clear search</button>{/if}
               <span role="status">{messageQuery.trim() ? `${matchingMessages.length} of ${messages.length} matching messages` : `${messages.length} messages`}</span>
             </div>
+            {#if !chatNearBottom || unreadMessageCount > 0 || messagePage > 0}
+              <div class="chat-jump-toolbar"><button type="button" class="soft-button small" onclick={() => void jumpToLatestMessage()}>Jump to latest{unreadMessageCount > 0 ? ` · ${unreadMessageCount} new` : ''}</button></div>
+            {/if}
             {#if matchingMessages.length > messagePageSize}
               <div class="message-pagination" role="group" aria-label="Conversation message pages">
-                <button type="button" class="soft-button small" disabled={messagePage >= maxMessagePage} onclick={() => (messagePage = Math.min(maxMessagePage, messagePage + 1))}>Older messages</button>
+                <button type="button" class="soft-button small" disabled={messagePage >= maxMessagePage} onclick={() => void showMessagePage(messagePage + 1)}>Older messages</button>
                 <span>Showing {Math.max(1, visibleMessageEnd - visibleMessages.length + 1)}–{visibleMessageEnd} of {matchingMessages.length}</span>
-                <button type="button" class="soft-button small" disabled={messagePage === 0} onclick={() => (messagePage = Math.max(0, messagePage - 1))}>Newer messages</button>
+                <button type="button" class="soft-button small" disabled={messagePage === 0} onclick={() => void showMessagePage(messagePage - 1)}>Newer messages</button>
               </div>
             {/if}
             <div role="log" aria-label="Conversation messages" aria-live="off">
             {#each visibleMessages as message (message.id)}
-              <article class="message"><div class:user-avatar={message.sender_kind === 'user'} class="message-avatar">{message.sender_kind === 'user' ? 'Y' : '✳'}</div><div class="message-body"><div class="message-byline"><strong>{message.sender_name}</strong><span>{timeDisplay(message.created_at)}</span>{#if message.simulated}<span class="simulated">Simulation</span>{/if}<button type="button" class="message-copy" aria-label={'Copy message from ' + message.sender_name} onclick={() => void copyMessageText(message.body)}>Copy message</button></div>
+              <article class="message" data-message-id={message.id}><div class:user-avatar={message.sender_kind === 'user'} class="message-avatar">{message.sender_kind === 'user' ? 'Y' : '✳'}</div><div class="message-body"><div class="message-byline"><strong>{message.sender_name}</strong><span>{timeDisplay(message.created_at)}</span>{#if message.simulated}<span class="simulated">Simulation</span>{/if}<button type="button" class="message-copy" aria-label={'Copy message from ' + message.sender_name} onclick={() => void copyMessageText(message.body)}>Copy message</button></div>
                 <div class="message-content">
                   {#each splitChatBlocks(message.body) as block, index (index)}
                     {#if block.kind === 'code'}
@@ -2281,9 +2405,21 @@
           </div>
           <div class="composer-container">
             <form class="composer" onsubmit={(event) => {event.preventDefault(); void sendMessage();}}>
-              <textarea bind:value={draft} disabled={busy || replyBusy || !isNative} aria-label="Write a local message" placeholder="Write a message to this room..." rows="2" onkeydown={(event) => {if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {event.preventDefault(); void sendMessage();}}}></textarea>
-              <div class="compose-bottom"><span class="save-local-label"><ShieldCheck size={14}/> Save in this room</span><button class="send-button" type="submit" disabled={!draft.trim() || busy || replyBusy || !isNative} title="Save message locally" aria-label="Save message locally">{#if busy}<Square size={16}/>{:else}<ArrowRight size={19}/>{/if}</button></div>
+              <textarea bind:value={draft} disabled={busy || replyBusy || !isNative || !draftReady} aria-label="Write a local message" placeholder={draftReady ? 'Write a message to this room...' : 'Loading saved drafts...'} rows="2" oninput={(event) => changeComposerDraft(event.currentTarget.value)} onblur={() => { if (draftReady && roomId) void draftPersistence.flush(roomId); }} onkeydown={(event) => {if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {event.preventDefault(); void sendMessage();}}}></textarea>
+              <div class="compose-bottom"><span class="save-local-label"><ShieldCheck size={14}/> Save in this room</span><button class="send-button" type="submit" disabled={!draft.trim() || busy || replyBusy || !isNative || !draftReady} title="Save message locally" aria-label="Save message locally">{#if busy}<Square size={16}/>{:else}<ArrowRight size={19}/>{/if}</button></div>
             </form>
+            {#if draftLoadError}
+              <div class="draft-save-feedback error" role="alert"><span>{draftLoadError}</span><button type="button" class="soft-button small" onclick={() => void hydrateComposerDrafts()}>Retry loading drafts</button></div>
+            {:else if draftReady}
+              <div class="draft-save-feedback" role="status" aria-live="polite">
+                <span>{draftStates[roomId] === 'saving' ? 'Saving draft locally…' : draftStates[roomId] === 'unsaved' ? 'Draft has changes not yet saved' : draftStates[roomId] === 'error' ? 'Draft not saved — your text is still in this window' : 'Draft saved locally in this project'}</span>
+                {#if draftStates[roomId] === 'error'}
+                  <span class="draft-save-error">{draftErrors[roomId]}</span>
+                  <button type="button" class="soft-button small" onclick={() => void draftPersistence.flush(roomId)}>Retry save</button>
+                  <button type="button" class="soft-button small" onclick={() => void restoreSavedDraft()}>Discard local changes and reload saved draft</button>
+                {/if}
+              </div>
+            {/if}
             <div class="reply-panel" aria-label="Request AI replies">
               <div class="reply-row">
                 <label class="reply-provider">Model provider

@@ -1,0 +1,29 @@
+# Constellation UX continuation: persistent drafts and readable chat
+
+**Date:** 2026-11-02
+
+**Branch:** `ux/competitor-rebuild-20261101`
+**Scope:** UX implementation in the isolated feature worktree, not a release acceptance report.
+
+## What changed
+
+1. **Unsent composer drafts** are project-local and persisted in native SQLite under `room_drafts`. The schema extension is narrowly whitelisted alongside historic six-table layouts, proposal-budget and evidence extensions. No browser local storage contains the draft. Draft text is bounded to 128 KiB UTF-8, and a per-room revision is advanced transactionally. Empty tombstones preserve revision history and prevent a stale window from resurrecting cleared content. A stale or corrupted schema fails closed instead of being silently repaired.
+2. **Desktop composer** loads saved drafts at startup, prevents typing before hydration, autosaves after a short pause and flushes on blur/room switch. It reports saved/saving/unsaved/error, offers a retry and explicit reload/discard after conflict, and warns on window unload when drafts are pending. Sending a message separately persists the user message with a stable operation ID; it never sends an AI request automatically.
+3. **Chat history reading** stores an anchor on the first visible message before refreshing, restores it after refresh when the reader is away from the bottom, displays an unread count and a Jump to latest control, and moves to the chosen message page. These changes do not grant file, model, or provider permissions.
+
+## Verification and limitations
+
+- Windows core unit tests: **7/7 PASS**, including exact text across restart, optimistic conflict, tombstone and strict schema validation. Strict core Clippy passed.
+- Desktop Rust unit tests at implementation stage: **132/132 PASS**, strict Clippy passed (follow-up post-UX source rebuild should reconfirm).
+- JavaScript regression suite: **153/153 PASS**, including four draft queue tests and two chat/scale tests. Svelte diagnostics: **0 errors, 0 warnings**. A source-contract test was deliberately updated for new scroll-reset behavior.
+- A deterministic 10,000-item pure task-pagination test confirms ordering and bounded rendered page size **only**. It is **not** a native 10,000-event stress test. SQLite snapshot still reads all records.
+- Draft cleanup following local user-message send is a separate native write, so an abrupt process crash between message commit and draft clear may show the same text on restart. Never automatically resend. An atomic native send-and-draft-clear mutation is a subsequent reliability enhancement.
+- The scroll anchor is a DOM-level approach. It needs real Windows WebView2 tests with long history and actual 200% page zoom, IME and physical keyboard tests on a disposable environment.
+- Multi-window draft conflicts deliberately refuse silent last-writer-wins behavior. Users can retry or explicitly reload the saved revision.
+- **Real Windows WebView2 private restart UIA PASS:** release-mode `constellation-desktop.exe` SHA-256 `F246AE0DE817C331A0D52D93DEC16D59DF9B5DFF6A45CA87035580E670B4E365`, run ID `52b2a0f966134e1eb9deecead1fd0f94`, exit code 0, `draft_status=pass_native_unsent_draft_recovered_exact_after_restart`, `isolation=verified_native_sqlite_created`, `process_closed=true`, `blockers=[]`, zero model/provider requests. Actual native UIA created an isolated room, typed disposable text, waited until native draft save was confirmed, stopped only the owned QA PID, restarted with the **native-authenticated** `--resume-isolated-data-dir` flag, and confirmed the exact unsent text in the newly launched WebView2 composer. Captured screenshot: `apps/desktop/src-tauri/target/ux-draft-native-resumable-20261102/draft-recovered-after-restart-52b2a0f966134e1eb9deecead1fd0f94.png` (ignored local QA artifact).
+- **Real Windows WebView2 workflow regression PASS:** same exact native binary, separate private desktop and synthetic profile; run ID `93ebf5ffb63948a5acfda3224489e928`, `workflow_status=pass_preview_save_reload_cancel_without_provider_calls`, zero fixture requests, `process_closed=true`, `blockers=[]`. QA screenshots under ignored `apps/desktop/src-tauri/target/ux-draft-workflow-regression-20261102/`.
+- Initial private QA attempts deliberately failed closed while adjusting the test harness: ordinary `constellation-ui-e2e-*` profiles cannot be restarted, and `--isolated-data-dir` may only open an empty directory. Correct, verified restart uses an original `constellation-model-qa-<32-hex>` folder inside Windows LOCALAPPDATA Temp, the app-generated identity marker and original two SQLite files. **Do not weaken this security restriction to make tests green.** The PowerShell harness checks those prerequisites before reopening; it never touches shared HKCU installer state.
+
+## Remaining UX-first gates
+
+Audit/finish provider credential retirement, native accessibility/keyboard/IME/zoom, large room/task/history stress, chat scroll native behavior, and end-to-end beginner workflows across home, rooms, teams, tasks, Evidence, library, settings, backup/recovery and file approvals. The draft PR is unmerged; no new GitHub release is authorized by these slice-level tests.

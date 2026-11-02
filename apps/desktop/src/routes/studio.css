@@ -148,6 +148,8 @@ h1,h2 { font-family:'Segoe UI', system-ui, sans-serif; }
 .chat-scroll { flex:1; min-height:145px; padding:20px clamp(26px,6vw,92px) 44px; overflow-y:auto; overscroll-behavior:contain; }
 .chat-scroll:focus-visible { outline:3px solid var(--color-focus); outline-offset:-5px; }
 .message-pagination { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:18px 0 6px; color:var(--color-text); font-size:11px; }
+.chat-jump-toolbar { position:sticky; z-index:2; top:8px; display:flex; justify-content:flex-end; pointer-events:none; min-height:0; }
+.chat-jump-toolbar button { pointer-events:auto; border:1px solid var(--color-border-strong); box-shadow:0 2px 8px var(--color-shadow); }
 .message-search-bar { display:flex; align-items:center; flex-wrap:wrap; gap:9px; padding:16px 0; border-bottom:1px solid var(--color-border-soft); }
 .message-search-bar label { font-size:12px; font-weight:750; color:var(--color-text); }
 .message-search-bar input { flex:1 1 190px; width:100%; min-width:0; max-width:350px; min-height:38px; padding:7px 11px; background:var(--color-surface-raised); color:var(--color-text); border:1px solid var(--color-border); border-radius:8px; font-size:12px; }
@@ -265,6 +267,9 @@ h1,h2 { font-family:'Segoe UI', system-ui, sans-serif; }
 .blank-panel h2 { font-size:19px; margin:0 0 6px; }
 .blank-panel p { max-width:350px; color:var(--color-text); font-size:12px; line-height:1.8; margin-bottom:22px; }
 .task-list { display:grid; gap:13px; max-width:900px; }
+.draft-save-feedback { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:11px; line-height:1.5; color:var(--color-text-muted); padding:6px 10px; }
+.draft-save-feedback.error,.draft-save-error { color:var(--color-danger); overflow-wrap:anywhere; }
+.draft-save-feedback button { min-height:32px; }
 .task-overview { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:9px; max-width:900px; margin-bottom:19px; }
 .task-overview > div { min-width:0; border:1px solid var(--color-border); background:var(--color-surface-alt); border-radius:12px; padding:13px 12px; display:grid; gap:5px; }
 .task-overview strong { font-size:23px; color:var(--color-text); font-variant-numeric:tabular-nums; }

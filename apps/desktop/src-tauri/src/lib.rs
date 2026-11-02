@@ -17,8 +17,8 @@ use constellation_backup_cli::BackupService;
 use constellation_core::OpenAiCompatibleAdapter;
 use constellation_core::{
     Agent, AgentId, ChatEntry, ChatRole, CredentialSource, MessageId, MessageSender, OperationId,
-    ProviderId, ProviderKind, ProviderProfile, RoomId, StudioSnapshot, StudioStore, Task, TaskId,
-    TaskState, export_room_markdown,
+    ProviderId, ProviderKind, ProviderProfile, RoomDraft, RoomId, StudioSnapshot, StudioStore,
+    Task, TaskId, TaskState, export_room_markdown,
 };
 use constellation_credential_vault::{
     ProviderKey, SERVICE as CREDENTIAL_SERVICE, Vault, VaultError,
@@ -773,6 +773,25 @@ fn snapshot_as_view(store: &StudioStore) -> Result<Value, String> {
 #[tauri::command]
 fn studio_bootstrap(state: State<'_, StudioState>) -> Result<Value, String> {
     snapshot_as_view(&state.store)
+}
+
+#[tauri::command]
+fn studio_list_room_drafts(state: State<'_, StudioState>) -> Result<Vec<RoomDraft>, String> {
+    state.store.room_drafts().map_err(err)
+}
+
+#[tauri::command]
+fn studio_save_room_draft(
+    state: State<'_, StudioState>,
+    room_id: String,
+    content: String,
+    expected_revision: i64,
+) -> Result<RoomDraft, String> {
+    let room_id: RoomId = room_id.parse().map_err(|_| "Invalid room ID")?;
+    state
+        .store
+        .save_room_draft(room_id, content, expected_revision)
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -4427,6 +4446,8 @@ pub fn run() {
             studio_reject_local_file_operation,
             studio_approve_local_file_operation,
             studio_bootstrap,
+            studio_list_room_drafts,
+            studio_save_room_draft,
             studio_export_room_markdown,
             studio_search_evidence,
             studio_extract_local_document,

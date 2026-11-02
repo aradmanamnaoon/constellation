@@ -49,7 +49,7 @@ test('conversation message search preserves local-only filtering and bounded pag
   assert.match(page, /matchingMessages\.slice\(/);
   assert.match(page, /id="conversation-message-search"/);
   assert.match(page, /No messages match this search/);
-  assert.match(page, /messageQuery = '';\s*\/\/ Explicitly reconfirm/);
+  assert.match(page, /messageQuery = '';\s*unreadMessageCount = 0;\s*chatNearBottom = true;\s*void tick\(\)\.then\(scrollChatToBottom\);\s*\/\/ Explicitly reconfirm/);
   assert.doesNotMatch(palette, /invoke\(|fetch\(/);
 });
 
