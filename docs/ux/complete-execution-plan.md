@@ -9,19 +9,19 @@ The status below distinguishes source implementation, native testing and public 
 | 01 | Protect repository/inspect current code | Completed | Isolated worktree; never overwrite canonical untracked files or production account data |
 | 02 | Competitor/skills baseline UX audit | Completed | 11 documented products, 30 patterns, 14 defects, actual skill provenance/qualified counts |
 | 03 | Core navigation/task UX changes | Completed, native partial | Searchable palette, rooms, task model isolation, filters and setup recovery; matching current-SHA native UIA |
-| 04 | Larger UX transformation | In progress | Screen density, roles, home dashboard, evidence/history, full task workflows, forms, responsive behavior and all controls |
-| 05 | Final Windows native UX | In progress | Installed launch, actual UIA typed search and strict historic SQLite restart **passed**; physical keyboard, zoom and broader end-to-end tasks still open |
-| 06 | Automated/security/recovery/a11y | In progress | Full frontend/Rust checks, source and skill gates, permission negatives, reliable visual/screen-reader and large-data evidence |
+| 04 | Larger UX transformation | In progress | Command palette, tasks, roles/home, local chat search and safe code blocks implemented; small-height responsive improvements made; remaining provider, room membership, long-history, IME and exhaustive keyboard journeys open |
+| 05 | Final Windows native UX | In progress | Latest installed launch, real UIA typed palette search, task journey, backup/restore/workflow and strict historical SQLite restart **passed**; actual high-DPI probe (not browser zoom) and full physical keyboard/screen reader remain separate gates |
+| 06 | Automated/security/recovery/a11y | In progress | **125/125** JS checks, Svelte check, Rust library/clippy/fmt and source inventory passed locally; permission negatives, 200% true reflow, full keyboard/RTL/IME and large-data evidence still open |
 | 07 | Windows installer | In progress | Native signed/unsigned status, isolated real NSIS install, installed UIA and exact bytes, upgrade/uninstall |
 | 08 | Linux installer and runtime | In progress | Final-source local WSL2 native .deb and AppImage **both built and rendered in isolated Xvfb**; clean distro installation and accessibility gates still open |
-| 09 | Android installer and runtime | Blocked | Android x86_64 Rust library compiled; Gradle 9.3.1 resolution/symlink privilege and native consent blockers; x86_64 QA AVD created |
+| 09 | Android installer and runtime | Blocked | Exact API37/AGP9.3.1 Android Gradle copied project built x86_64 **debug diagnostic** APK with isolated HTTPS Maven mirror and existing Rust library; the isolated emulator did not become ADB-ready and was safely stopped, no tested signed production artifact or native consent parity; see `android-local-qa-2026-11-02.md` |
 | 10 | macOS ARM64/Intel local acceptance | Blocked | No accessible macOS machine or VM to perform local Xcode DMG builds, installation, signing/notarization and real GUI QA |
-| 11 | Integrate code, release metadata and push | Pending | Review branch against current main; all relevant acceptance gates, honest version, signing, checksums and CI results |
+| 11 | Integrate code, release metadata and push | In progress | First 32-file UX commit `6d9143ce` safely pushed; draft GitHub PR #1 open. GitHub Actions fail **before any steps** due confirmed account payment/spending-limit block, not an executed code test. Later compact-height/QA refinements require a tested follow-up commit; no force push or canonical checkout overwrite |
 | 12 | Complete GitHub release | Blocked | Publish only once all requested OS artifacts are verified, or explicitly revise scope; check GitHub URLs, download hashes and release title |
 
 ## Release rule
 
-The user requested locally tested Windows/macOS/Linux/Android deliverables. As of this run, a Windows host cannot itself execute the two macOS architectures, and Android release packaging/native support remains incomplete. Do not create an apparently complete release or relabel a stale/debug artifact to disguise this. Existing `v0.1.2-local-desktop-preview-20261101` remains a separate, clearly marked preview.
+The user requested locally tested Windows/macOS/Linux/Android deliverables. As of this run, a Windows host cannot itself execute the two macOS architectures, and Android production release packaging/native support remains incomplete. GitHub Actions annotations explicitly report account payment or Actions spending-limit problems; the owner must resolve **Settings → Billing & plans**, after which actual CI can be rerun. Do not create an apparently complete release or relabel a stale/debug artifact to disguise this. Existing `v0.1.2-local-desktop-preview-20261101` remains a separate, clearly marked preview.
 
 ## Required exit criteria
 

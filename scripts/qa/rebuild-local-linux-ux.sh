@@ -11,7 +11,13 @@ linux_root=/home/saba/constellation-ux-linux
   exit 2
 }
 cd "$source_root"
-tar --exclude=.git --exclude=node_modules --exclude=target --exclude=target-linux --exclude=target-android -cf - . | tar -xf - -C "$linux_root"
+# Exclude volatile generated frontend outputs too. A concurrent Windows Vite
+# build may rewrite them during this source copy, causing tar to fail with
+# "file changed as we read it" even though tracked sources are unchanged.
+tar --exclude=.git --exclude=node_modules --exclude=target --exclude=target-linux --exclude=target-android \
+    --exclude='./apps/desktop/.svelte-kit' --exclude='./apps/desktop/build' \
+    --exclude='./apps/desktop/dist' --exclude='./apps/desktop/src-tauri/target' \
+    -cf - . | tar -xf - -C "$linux_root"
 cd "$linux_root"
 export PATH="/home/saba/.cargo/bin:$PATH"
 export CARGO_TARGET_DIR="$source_root/target-linux"

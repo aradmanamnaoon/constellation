@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 
 const page = readFileSync(new URL('../apps/desktop/src/routes/+page.svelte', import.meta.url), 'utf8');
 const palette = readFileSync(new URL('../apps/desktop/src/lib/WorkspaceCommandPalette.svelte', import.meta.url), 'utf8');
+const styles = readFileSync(new URL('../apps/desktop/src/routes/studio.css', import.meta.url), 'utf8');
 
 const rooms = [
   { id: 'room-1', name: 'Medical Research' },
@@ -50,6 +51,17 @@ test('conversation message search preserves local-only filtering and bounded pag
   assert.match(page, /No messages match this search/);
   assert.match(page, /messageQuery = '';\s*\/\/ Explicitly reconfirm/);
   assert.doesNotMatch(palette, /invoke\(|fetch\(/);
+});
+
+test('small-height palette prioritizes visible results but keeps accessible keyboard help', () => {
+  assert.match(styles, /\.studio \.modal\.command-dialog\s*\{[^}]*height:min\(90dvh,710px\)/);
+  assert.match(styles, /\.workspace-command-search input\s*\{[^}]*height:39px/);
+  assert.match(styles, /\.workspace-command-results button\s*\{[^}]*min-height:45px/);
+  assert.match(styles, /@media\(max-height:640px\)/);
+  assert.match(styles, /\.studio \.command-dialog #workspace-command-hint\s*\{[^}]*clip-path:inset\(50%\)/);
+  assert.match(styles, /\.studio \.command-dialog \.workspace-command-results button\s*\{[^}]*min-height:41px/);
+  assert.match(palette, /aria-describedby="workspace-command-hint"/);
+  assert.match(palette, /role="listbox"/);
 });
 
 test('task provider choices are independent of chat and from other task cards', () => {

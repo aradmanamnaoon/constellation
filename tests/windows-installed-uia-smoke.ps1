@@ -16,6 +16,7 @@ param(
   [switch]$TestTaskJourney,
   [ValidateRange(800, 4096)][int]$ViewportWidth = 0,
   [ValidateRange(560, 2160)][int]$ViewportHeight = 0,
+  [ValidateSet(1, 2)][int]$WebViewDeviceScaleFactor = 1,
   [Parameter(Mandatory = $true)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedExeSha256,
   [string]$HiddenDesktopWorkerName
 )
@@ -39,6 +40,7 @@ if (-not $HiddenDesktopWorkerName) {
     ScriptPath = $PSCommandPath; ExePath = $resolvedExe; TimeoutSeconds = $TimeoutSeconds
     ExpectedExeSha256 = $ExpectedExeSha256; TestCommandPalette = [bool]$TestCommandPalette
     TestTaskJourney = [bool]$TestTaskJourney; ViewportWidth = $ViewportWidth; ViewportHeight = $ViewportHeight
+    WebViewDeviceScaleFactor = $WebViewDeviceScaleFactor
   }
   if ($OutputDirectory) {
     $workerParams.OutputDirectory = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
@@ -163,6 +165,7 @@ $result = [ordered]@{
   native_owner_predicates = $null
   window_bounds_px = $null
   viewport_resize_status = if ($ViewportWidth -gt 0) { 'pending' } else { 'not_requested' }
+  webview_scale_request = if ($WebViewDeviceScaleFactor -eq 2) { 'forced WebView2 device-scale-factor 2; effect requires screenshot inspection, not actual browser zoom' } else { 'default' }
   webview_ready = $false
   uia_status = if ($uiaAvailable) { 'not_checked' } else { 'unavailable' }
   uia_descendants = 0
@@ -194,6 +197,11 @@ try {
   $psi.EnvironmentVariables['TEMP'] = Join-Path $scratchRoot 'Temp'
   $psi.EnvironmentVariables['TMP'] = Join-Path $scratchRoot 'Temp'
   $psi.EnvironmentVariables['WEBVIEW2_USER_DATA_FOLDER'] = Join-Path $scratchRoot 'WebView2'
+  if ($WebViewDeviceScaleFactor -eq 2) {
+    # This is a PRIVATE child-process WebView2 command line for a high-DPI
+    # layout probe. It never changes the user's OS scaling or browser profile.
+    $psi.EnvironmentVariables['WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS'] = '--force-device-scale-factor=2'
+  }
 
   # Old installed builds ignore the new CLI isolation flag. Reject those
   # builds before any startup: otherwise the GUI would open the real profile.

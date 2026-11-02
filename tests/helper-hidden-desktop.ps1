@@ -211,6 +211,7 @@ function Invoke-ConstellationHiddenDesktopWorker {
     [switch]$TestTaskJourney,
     [int]$ViewportWidth,
     [int]$ViewportHeight,
+    [int]$WebViewDeviceScaleFactor = 1,
     [string]$ExpectedExeSha256,
     [string]$ExpectedNativeSourceSha256,
     [string]$ExpectedSourceIdentityPath
@@ -230,6 +231,7 @@ function Invoke-ConstellationHiddenDesktopWorker {
   if ($TestCommandPalette) { $scriptLine += ' -TestCommandPalette' }
   if ($TestTaskJourney) { $scriptLine += ' -TestTaskJourney' }
   if ($ViewportWidth -gt 0 -and $ViewportHeight -gt 0) { $scriptLine += " -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight" }
+  if ($WebViewDeviceScaleFactor -eq 2) { $scriptLine += ' -WebViewDeviceScaleFactor 2' }
   if ($ExpectedExeSha256) { $scriptLine += " -ExpectedExeSha256 $(Quote-HiddenWorkerLiteral $ExpectedExeSha256)" }
   if ($ExpectedNativeSourceSha256) { $scriptLine += " -ExpectedNativeSourceSha256 $(Quote-HiddenWorkerLiteral $ExpectedNativeSourceSha256)" }
   if ($ExpectedSourceIdentityPath) { $scriptLine += " -ExpectedSourceIdentityPath $(Quote-HiddenWorkerLiteral $ExpectedSourceIdentityPath)" }
