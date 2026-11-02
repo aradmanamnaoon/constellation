@@ -26,3 +26,5 @@ The user requested locally tested Windows/macOS/Linux/Android deliverables and s
 ## Required exit criteria
 
 Run actual installed app on disposable profiles at least twice; preserve SQLite and tool recovery integrity; use controlled zero-cost model fixtures for network workflows; prove exact source-build hashes; run platform-specific installer, native GUI, accessibility, crash/restart, signing and download checks. Every unsupported or unrun check is recorded explicitly.
+
+**Latest continuation evidence:** `local-ux-validation-release-decision-20261102.md` documents exact pushed source `8c9478a`, Windows native GUI passes, Ubuntu full 14-crate source matrix, insufficient C:/RAM headroom for fresh Linux packaging, a blocked Windows installer guest lifecycle, and an explicit failing clean-checkout release-readiness preflight. Source gates and UI slices do not clear the full 12-step release mission.
