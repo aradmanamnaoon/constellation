@@ -8,13 +8,14 @@ The screenshot is from a real Windows Tauri/WebView2 development build. The
 two-agent response test used a deterministic localhost fixture, **not an AI
 model**, and is documented with [actual Windows GUI evidence](docs/qa/windows-native-smoke.md).
 
-> **Development status: functional prototype, not a production release.** The
-> requested 200 role definitions are present, while the 200 vetted development integrations,
-> secured coding execution, Android APK, remote runner, encrypted sync,
-> cross-platform installers, full platform testing, and public releases have
-> **not** been delivered. An experimental local Windows NSIS installer was
-> built and tested separately; no production installer has been published. Do not
-> expose private files, credentials, or high-risk workflows to this prototype.
+> **Development status: public-source functional prototype, not a production release.**
+> The requested 200 prompt-only role definitions are present, but 200 vetted
+> development integrations, secured autonomous coding, Android, remote runners,
+> encrypted cloud sync, full platform testing and production releases have
+> **not** been delivered. An [unsigned experimental v0.1.2 prerelease](https://github.com/aradmanamnaoon/constellation/releases/tag/v0.1.2-local-desktop-preview-20261101)
+> provides Windows x64 and Linux x86_64 packages only, with documented verification
+> limitations. No macOS or Android binaries are included. Do not use the prototype
+> with sensitive files, credentials, or high-risk workflows.
 
 ## What is implemented
 
@@ -144,13 +145,14 @@ model**, and is documented with [actual Windows GUI evidence](docs/qa/windows-na
 
 ## Install and explore
 
-**Windows x64:** A locally built, **unsigned experimental** NSIS installer is
-generated at
-`apps/desktop/src-tauri/target/release/bundle/nsis/Constellation_0.1.0_x64-setup.exe`
-when `pnpm tauri build --bundles nsis` completes. That local file is not a
-verified public download. Cross-platform installation packages and release
-links do **not** exist yet. The latest validation/installer identity is recorded
-in [native QA](docs/qa/windows-native-smoke.md).
+**Public experimental preview:** [Constellation v0.1.2 GitHub prerelease](https://github.com/aradmanamnaoon/constellation/releases/tag/v0.1.2-local-desktop-preview-20261101)
+offers an unsigned Windows x64 portable executable and NSIS installer, plus Linux
+x86_64 AppImage and Debian packages. Check the release notes and supplied
+SHA-256 verification manifest before using any package. These are experimental
+artifacts, not production-certified installers, and no macOS/Android downloads
+are provided. Native acceptance scope and limitations are documented in the
+[release notes](https://github.com/aradmanamnaoon/constellation/releases/tag/v0.1.2-local-desktop-preview-20261101)
+and [Windows QA](docs/qa/windows-native-smoke.md).
 
 Begin with the illustrated-style [getting-started guide](docs/getting-started.md)
 and [provider/privacy notes](docs/providers.md). You can create a room and save
