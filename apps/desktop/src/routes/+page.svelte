@@ -15,6 +15,7 @@
   import { splitChatBlocks } from '../lib/chat-format';
   import { filterProviderDirectory, type ProviderStatusFilter } from '../lib/provider-directory';
   import { prepareProviderRevision } from '../lib/provider-revision';
+  import { paginateLocal } from '../lib/local-pagination';
   import './studio.css';
 
   type Screen = 'home' | 'rooms' | 'tasks' | 'evidence' | 'library' | 'settings';
@@ -39,7 +40,7 @@
   type WorkflowStepDefinition = { id: string; role: string; agent_id: string; provider_id: string; instruction: string; depends_on: string[]; max_attempts: number };
   type WorkflowDefinition = { schema_version: number; workflow_id: string; steps: WorkflowStepDefinition[] };
   type SavedWorkflow = { definition: WorkflowDefinition; states: Record<string, { status: string; attempts: number; result_text?: string | null }>; ready_step_ids: string[]; revision: number; cancelled: boolean };
-  type WorkflowListResponse = { items: SavedWorkflow[]; max_items: number; has_more: boolean };
+  type WorkflowListResponse = { items: SavedWorkflow[]; max_items: number; offset: number; query: string; has_more: boolean };
   type WorkflowCreateResponse = { workflow_id: string; revision: number; ready_step_ids: string[]; stored: boolean; executed: boolean; tools_executed: boolean };
   type WorkflowCancelResponse = { workflow_id: string; revision: number; cancelled: boolean };
   type WorkflowStepResponse = { workflow_id: string; step_id: string; revision: number; status: string; result_text: string; ready_step_ids: string[]; provider_requests_sent: boolean; tools_executed: boolean };
@@ -151,6 +152,8 @@
   let taskFilterRoomId = $state('');
   let taskSearch = $state('');
   let taskStatusFilter = $state<'all' | 'open' | 'done' | 'attention'>('all');
+  const taskPageSize = 40;
+  let taskPage = $state(0);
   let taskProviders = $state<Record<string, string>>({});
   let taskAgentId = $state('');
   let taskInstructions = $state('');
@@ -204,6 +207,8 @@
   let evidenceNotice = $state('');
   let evidenceLoadConfirmation = $state<{sourceId: string; sha256: string} | null>(null);
   let evidenceSavedResults = $state(false);
+  let evidenceSavedOffset = $state(0);
+  let evidenceSavedHasMore = $state(false);
   let evidenceDeleteConfirmation = $state<{sourceId: string; sha256: string} | null>(null);
   let evidenceImportRights = $state(false);
   let evidencePendingImport = $state<File | null>(null);
@@ -236,6 +241,10 @@
   let validatedWorkflowSignature = $state('');
   let workflowPreview = $state<WorkflowPreview | null>(null);
   let savedWorkflows = $state<SavedWorkflow[]>([]);
+  const workflowPageSize = 25;
+  let workflowOffset = $state(0);
+  let workflowSearchQuery = $state('');
+  let workflowAppliedSearch = $state('');
   let workflowHasMore = $state(false);
   let workflowLoading = $state(false);
   let workflowLoaded = $state(false);
@@ -301,6 +310,10 @@
       || (taskStatusFilter === 'attention' && ['failed', 'cancelled'].includes(task.state));
     return inSearch && inStatus;
   }));
+  const taskPagination = $derived(paginateLocal(visibleRoomTasks, taskPage, taskPageSize));
+  const taskLastPage = $derived(taskPagination.lastPage);
+  const currentTaskPage = $derived(taskPagination.page);
+  const pagedRoomTasks = $derived(taskPagination.items);
   const taskCounts = $derived({
     total: roomTasks.length,
     awaiting: roomTasks.filter((task) => task.state === 'pending' || task.state === 'queued').length,
@@ -733,6 +746,8 @@
     evidenceSearched = false;
     evidenceError = '';
     evidenceSavedResults = false;
+    evidenceSavedOffset = 0;
+    evidenceSavedHasMore = false;
     evidenceNotice = '';
   }
 
@@ -933,19 +948,23 @@
     }
   }
 
-  async function searchSavedEvidence() {
+  async function searchSavedEvidence(offset = 0) {
     const query = evidenceQuery.trim();
-    if (!isNative || evidenceBusy || !query || queryTooLarge) return;
+    if (!isNative || evidenceBusy || !query || queryTooLarge ||
+        !Number.isSafeInteger(offset) || offset < 0 || offset > 990 || offset % 10 !== 0) return;
     evidenceBusy = true;
     evidenceError = '';
     evidenceHits = [];
     evidenceSearched = false;
     try {
-      const response = await invoke<{ results: EvidenceHit[]; model_called: boolean; stored: boolean }>(
-        'studio_search_saved_evidence', { query }
+      const response = await invoke<{ results: EvidenceHit[]; model_called: boolean; stored: boolean; offset: number; page_size: number; max_ranked_hits: number; has_more: boolean }>(
+        'studio_search_saved_evidence', { query, offset }
       );
       if (response.model_called !== false || response.stored !== true ||
-        !Array.isArray(response.results) || response.results.length > 10) throw new Error('Invalid saved search');
+        response.offset !== offset || response.page_size !== 10 || response.max_ranked_hits !== 1_000 ||
+        typeof response.has_more !== 'boolean' ||
+        !Array.isArray(response.results) || response.results.length > 10 ||
+        (response.has_more && response.results.length !== 10)) throw new Error('Invalid saved search');
       // Independently check each quoted byte range against the exact saved
       // source fetched through trusted Rust. If it changes, discard results.
       const sourceIds = [...new Set(response.results.map((hit) => hit.source_id))];
@@ -969,6 +988,8 @@
       evidenceHits = response.results;
       evidenceSearched = true;
       evidenceSavedResults = true;
+      evidenceSavedOffset = response.offset;
+      evidenceSavedHasMore = response.has_more;
       await refreshSavedEvidence();
     } catch {
       if (evidenceQuery.trim() === query) evidenceError = 'Saved-source search could not be verified.';
@@ -1004,6 +1025,9 @@
     const query = evidenceQuery.trim();
     evidenceHits = [];
     evidenceSearched = false;
+    evidenceSavedResults = false;
+    evidenceSavedOffset = 0;
+    evidenceSavedHasMore = false;
     evidenceError = '';
     if (!sourceText.trim() || !query) {
       evidenceError = 'Add a document and search terms.';
@@ -1675,18 +1699,30 @@
     return JSON.stringify({ schema_version: 1, workflow_id: id, steps });
   }
 
-  async function loadWorkflows() {
-    if (!isNative || workflowLoading) return;
+  async function loadWorkflows(targetOffset = workflowOffset, searchTerm = workflowAppliedSearch) {
+    if (!isNative || workflowLoading || workflowBusy || workflowCancelBusy ||
+        !Number.isSafeInteger(targetOffset) || targetOffset < 0 ||
+        targetOffset > 100_000 || targetOffset % workflowPageSize !== 0) return;
+    if (new TextEncoder().encode(searchTerm).length > 128 || /[\x00-\x1f\x7f]/.test(searchTerm)) {
+      workflowError = 'Search must be at most 128 UTF-8 bytes, without control characters.';
+      return;
+    }
     workflowLoading = true;
+    workflowError = '';
     try {
-      const response = await invoke<WorkflowListResponse>('studio_list_workflows');
-      if (!Array.isArray(response.items) || response.items.length > 100 || typeof response.has_more !== 'boolean' ||
+      const response = await invoke<WorkflowListResponse>('studio_list_workflows', { offset: targetOffset, query: searchTerm });
+      if (!Array.isArray(response.items) || response.items.length > workflowPageSize ||
+          response.max_items !== workflowPageSize || response.offset !== targetOffset || response.query !== searchTerm ||
+          typeof response.has_more !== 'boolean' ||
+          (response.has_more && response.items.length !== workflowPageSize) ||
           !response.items.every((item) => item.definition && typeof item.definition.workflow_id === 'string' &&
             Array.isArray(item.definition.steps) && Array.isArray(item.ready_step_ids) &&
             Number.isSafeInteger(item.revision) && typeof item.cancelled === 'boolean')) {
         throw new Error('Invalid workflow list response');
       }
       savedWorkflows = response.items;
+      workflowOffset = response.offset;
+      workflowAppliedSearch = response.query;
       workflowHasMore = response.has_more;
       workflowLoaded = true;
     } catch {
@@ -1749,6 +1785,11 @@
         throw new Error('Invalid native save confirmation');
       }
       workflowNotice = 'Workflow saved locally. No AI requests or device tools started.';
+      // Reveal the newly saved record even when the user had been browsing a
+      // different history page or filtering by an unrelated identifier.
+      workflowOffset = 0;
+      workflowSearchQuery = id;
+      workflowAppliedSearch = id;
       workflowDraftId = '';
       workflowPreview = null;
       validatedWorkflowJson = '';
@@ -2322,7 +2363,7 @@
             <section aria-labelledby="home-tasks-title" class="home-work-panel">
               <div class="home-work-heading"><h2 id="home-tasks-title">Open tasks</h2><button type="button" class="text-button" onclick={() => navigate('tasks')}>All tasks <ArrowRight size={14}/></button></div>
               {#each homeOpenTasks as activeTask (activeTask.id)}
-                <button type="button" class="home-work-link" onclick={() => { taskFilterRoomId = activeTask.room_id; taskSearch = activeTask.instructions.slice(0, 40); taskStatusFilter = 'all'; navigate('tasks'); }}>
+                <button type="button" class="home-work-link" onclick={() => { taskFilterRoomId = activeTask.room_id; taskSearch = activeTask.instructions.slice(0, 40); taskStatusFilter = 'all'; taskPage = 0; navigate('tasks'); }}>
                   <span class="home-task-state" data-state={activeTask.state}>{activeTask.state}</span><strong>{activeTask.instructions}</strong><ChevronRight size={15}/>
                 </button>
               {:else}<p>No tasks currently awaiting action. Create a task from any room.</p>{/each}
@@ -2340,10 +2381,10 @@
         </div>
         {#if tasksView === 'tasks'}
         <p class="task-provider-notice" id="task-run-effects">Each task has its own model selection. Review its instructions and provider before Run; the model request may use paid credits. Models cannot execute device tools. Cancelling later cannot recall an already-sent request.</p>
-        <div class="tasks-filter"><label for="tasks-room-filter">Show tasks for</label><select id="tasks-room-filter" bind:value={taskFilterRoomId}><option value="">All rooms</option>{#each snapshot.rooms as taskRoom (taskRoom.id)}<option value={taskRoom.id}>{taskRoom.name}</option>{/each}</select><label for="tasks-search">Find a task</label><input id="tasks-search" type="search" bind:value={taskSearch} placeholder="Instructions or agent…" autocomplete="off" /></div>
+        <div class="tasks-filter"><label for="tasks-room-filter">Show tasks for</label><select id="tasks-room-filter" bind:value={taskFilterRoomId} onchange={() => (taskPage = 0)}><option value="">All rooms</option>{#each snapshot.rooms as taskRoom (taskRoom.id)}<option value={taskRoom.id}>{taskRoom.name}</option>{/each}</select><label for="tasks-search">Find a task</label><input id="tasks-search" type="search" bind:value={taskSearch} oninput={() => (taskPage = 0)} placeholder="Instructions or agent…" autocomplete="off" /></div>
         <div class="task-status-filter" role="group" aria-label="Filter tasks by status">
           {#each [{id:'all',label:'All'},{id:'open',label:'In progress'},{id:'done',label:'Completed'},{id:'attention',label:'Needs attention'}] as filter}
-            <button type="button" class:chosen={taskStatusFilter === filter.id} aria-pressed={taskStatusFilter === filter.id} onclick={() => (taskStatusFilter = filter.id as typeof taskStatusFilter)}>{filter.label}</button>
+            <button type="button" class:chosen={taskStatusFilter === filter.id} aria-pressed={taskStatusFilter === filter.id} onclick={() => { taskStatusFilter = filter.id as typeof taskStatusFilter; taskPage = 0; }}>{filter.label}</button>
           {/each}
         </div>
         <div class="task-overview" aria-label="Task plan progress">
@@ -2356,11 +2397,11 @@
         {#if roomTasks.length === 0}
           <div class="blank-panel"><div class="blank-icon"><Layers3 size={26}/></div><h2>{taskFilterRoomId ? 'No tasks in this room' : 'No tasks planned yet'}</h2><p>Create a room and a teammate, then save a task. Run text-only work manually through your chosen model; device tools are not enabled.</p><button class="soft-button" onclick={() => openTaskDialog()}>Plan your first task <ArrowRight size={15}/></button></div>
         {:else if visibleRoomTasks.length === 0}
-          <div class="blank-panel"><div class="blank-icon"><Search size={26}/></div><h2>No matching tasks</h2><p>Try another status, room, or search term. Your tasks have not been changed.</p><button class="soft-button" onclick={() => { taskSearch = ''; taskStatusFilter = 'all'; taskFilterRoomId = ''; }}>Clear task filters</button></div>
+          <div class="blank-panel"><div class="blank-icon"><Search size={26}/></div><h2>No matching tasks</h2><p>Try another status, room, or search term. Your tasks have not been changed.</p><button class="soft-button" onclick={() => { taskSearch = ''; taskStatusFilter = 'all'; taskFilterRoomId = ''; taskPage = 0; }}>Clear task filters</button></div>
         {:else}
-          <p class="task-filter-count" role="status">Showing {visibleRoomTasks.length} of {roomTasks.length} tasks</p>
+          <p class="task-filter-count" role="status">Showing {currentTaskPage * taskPageSize + 1}–{currentTaskPage * taskPageSize + pagedRoomTasks.length} of {visibleRoomTasks.length} matching tasks ({roomTasks.length} total)</p>
           <div class="task-list" aria-label="Saved tasks">
-            {#each visibleRoomTasks as task (task.id)}
+            {#each pagedRoomTasks as task (task.id)}
               <article class="task-card">
                 <div class="task-card-top"><span class="task-state" data-state={task.state}>{task.state === 'pending' ? 'Pending · Not executed' : task.state === 'cancelled' ? 'Cancelled' : task.state === 'running' ? 'Running · Text request' : task.state}</span><span class="task-date">{timeDisplay(task.created_at)}</span></div>
                 <p class="task-instructions">{task.instructions}</p>
@@ -2541,6 +2582,13 @@
               </article>
             {/each}
           </div>
+          {#if visibleRoomTasks.length > taskPageSize}
+            <nav class="task-pages" aria-label="Task result pages">
+              <button type="button" class="soft-button small" disabled={currentTaskPage === 0 || !!runningTaskId || working} onclick={() => (taskPage = Math.max(0, currentTaskPage - 1))}>Previous tasks</button>
+              <span role="status" aria-live="polite">Page {currentTaskPage + 1} of {taskLastPage + 1}</span>
+              <button type="button" class="soft-button small" disabled={currentTaskPage === taskLastPage || !!runningTaskId || working} onclick={() => (taskPage = Math.min(taskLastPage, currentTaskPage + 1))}>Next tasks</button>
+            </nav>
+          {/if}
         {/if}
         {:else}
           <section class="workflow-workspace" aria-label="Local workflow plans">
@@ -2622,10 +2670,19 @@
             </form>
             <section class="workflow-saved" aria-label="Saved local workflows">
               <div class="workflow-saved-header"><h2>Saved workflows</h2><button type="button" class="soft-button small" disabled={!isNative || workflowLoading || workflowBusy} onclick={() => void loadWorkflows()}>{workflowLoading ? 'Refreshing…' : 'Refresh list'}</button></div>
+              <form class="workflow-search" aria-label="Find saved workflow by ID" onsubmit={(event) => { event.preventDefault(); void loadWorkflows(0, workflowSearchQuery.trim()); }}>
+                <label for="workflow-id-search">Find workflow ID</label>
+                <input id="workflow-id-search" type="search" bind:value={workflowSearchQuery} maxlength="120" placeholder="Search all saved workflow IDs…" autocomplete="off" aria-describedby="workflow-id-search-help" disabled={!isNative || workflowLoading || workflowBusy || workflowCancelBusy} />
+                <button type="submit" class="soft-button small" disabled={!isNative || workflowLoading || workflowBusy || workflowCancelBusy}>Search</button>
+                {#if workflowAppliedSearch}<button type="button" class="soft-button small" disabled={workflowLoading || workflowBusy || workflowCancelBusy} onclick={() => { workflowSearchQuery = ''; void loadWorkflows(0, ''); }}>Clear filter</button>{/if}
+              </form>
+              <p id="workflow-id-search-help" class="workflow-help">Finds matching workflow IDs across all saved pages, entirely on this device. Search is literal, not a wildcard; 128 UTF-8 bytes maximum.</p>
               {#if workflowNotice}<p class="workflow-feedback" role="status" aria-live="polite">{workflowNotice}</p>{/if}
               {#if workflowError}<p class="evidence-error" role="alert">{workflowError}</p>{/if}
               {#if !workflowLoaded}<p class="workflow-help">Open the desktop app and refresh to see locally saved plans.</p>
-              {:else if savedWorkflows.length === 0}<p class="workflow-help">No workflows saved on this device yet.</p>
+              {:else if savedWorkflows.length === 0}
+                <p class="workflow-help">{workflowAppliedSearch ? 'No saved workflows match that ID search.' : workflowOffset === 0 ? 'No workflows saved on this device yet.' : 'No workflows on this page. The list may have changed in another window.'}</p>
+                {#if workflowOffset > 0}<button type="button" class="soft-button small" disabled={workflowLoading} onclick={() => void loadWorkflows(0)}>Return to first page</button>{/if}
               {:else}
                 <div class="workflow-saved-list">
                   {#each savedWorkflows as item (item.definition.workflow_id)}
@@ -2672,7 +2729,13 @@
                     </article>
                   {/each}
                 </div>
-                {#if workflowHasMore}<p class="workflow-help">Showing the first 100 saved workflows. Older records may not be listed here.</p>{/if}
+              {/if}
+              {#if workflowLoaded && (workflowOffset > 0 || workflowHasMore)}
+                <nav class="workflow-pages" aria-label="Saved workflow pages">
+                  <button type="button" class="soft-button small" disabled={!isNative || workflowLoading || workflowBusy || workflowCancelBusy || workflowOffset === 0} onclick={() => void loadWorkflows(Math.max(0, workflowOffset - workflowPageSize))}>Previous page</button>
+                  <span role="status" aria-live="polite">{savedWorkflows.length ? `Workflows ${workflowOffset + 1}–${workflowOffset + savedWorkflows.length}` : `Page ${workflowOffset / workflowPageSize + 1}`} · Page {workflowOffset / workflowPageSize + 1}{workflowAppliedSearch ? ' · Filtered by ID' : ''}</span>
+                  <button type="button" class="soft-button small" disabled={!isNative || workflowLoading || workflowBusy || workflowCancelBusy || !workflowHasMore || workflowOffset >= 100_000} onclick={() => void loadWorkflows(workflowOffset + workflowPageSize)}>Next page</button>
+                </nav>
               {/if}
             </section>
           </section>
@@ -2763,11 +2826,18 @@
           {:else}<p class="evidence-field-note">Saved sources have not been loaded or verified. Select Refresh to inspect this device's project library.</p>{/if}
         </section>
         {#if evidenceSearched}
-          <section class="evidence-results" aria-label="Document evidence results"><h2 role="status">{evidenceHits.length ? `${evidenceHits.length} matching passages ${evidenceSavedResults ? 'from saved sources' : 'from current text'}` : 'No matching passages'}</h2>
+          <section class="evidence-results" aria-label="Document evidence results"><h2 role="status">{evidenceHits.length ? `${evidenceSavedResults ? `Showing ranked matches ${evidenceSavedOffset + 1}–${evidenceSavedOffset + evidenceHits.length} from saved sources` : `${evidenceHits.length} matching passages from current text`}` : 'No matching passages'}</h2>
             <p class="evidence-field-note">Matches are verbatim UTF-8 spans checked against {evidenceSavedResults ? 'the saved source text' : 'this exact current draft'}. A matching passage does not independently validate its claims. Confirm citations in the original document before relying on them.</p>
             {#each evidenceHits as hit (`${hit.source_sha256}-${hit.start_byte}-${hit.end_byte}`)}
                   <article class="evidence-hit"><div class="evidence-hit-meta"><span><FileSearch size={14}/> {hit.relative_path} · UTF-8 bytes [{hit.start_byte}, {hit.end_byte})</span><button type="button" class="soft-button small" onclick={() => void copyEvidence(hit)}>Copy quote and citation</button></div><blockquote>{hit.quote}</blockquote>{#if evidenceAnchorLabel(hit)}<p class="evidence-field-note">Extracted from {evidenceAnchorLabel(hit)}. Verify in the original file; page/paragraph mapping is not saved with extracted text.</p>{/if}<details class="evidence-provenance"><summary>Check exact source SHA-256</summary><div class="evidence-hash" role="note" aria-label={'Source SHA-256: ' + hit.source_sha256}>Source SHA-256: {hit.source_sha256}</div></details></article>
             {:else}<p class="evidence-empty">Try different terms. No passage is shown without a source match.</p>{/each}
+            {#if evidenceSavedResults && (evidenceSavedOffset > 0 || evidenceSavedHasMore)}
+              <nav class="evidence-pages" aria-label="Saved evidence result pages">
+                <button type="button" class="soft-button small" disabled={evidenceBusy || evidenceSavedOffset === 0} onclick={() => void searchSavedEvidence(Math.max(0, evidenceSavedOffset - 10))}>Previous evidence</button>
+                <span role="status" aria-live="polite">Page {evidenceSavedOffset / 10 + 1} · Top 1,000 ranked matches maximum</span>
+                <button type="button" class="soft-button small" disabled={evidenceBusy || !evidenceSavedHasMore} onclick={() => void searchSavedEvidence(evidenceSavedOffset + 10)}>Next evidence</button>
+              </nav>
+            {/if}
           </section>
         {/if}
       </div>

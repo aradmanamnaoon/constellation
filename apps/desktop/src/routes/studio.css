@@ -353,6 +353,16 @@ h1,h2 { font-family:'Segoe UI', system-ui, sans-serif; }
 .workflow-saved { display:grid; gap:15px; margin-top:10px; border-top:1px solid var(--color-border); padding-top:23px; }
 .workflow-saved-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .workflow-saved-list { display:grid; gap:11px; }
+.workflow-pages { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:12px 0 4px; }
+.workflow-pages span { font-size:12px; color:var(--color-text-muted); font-variant-numeric:tabular-nums; }
+.workflow-pages button { min-height:36px; }
+.workflow-search { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+.workflow-search label { flex:0 0 auto; font-size:12px; color:var(--color-text-muted); }
+.workflow-search input { flex:1 1 200px; min-width:0; }
+.task-pages { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:12px; padding:16px 0; }
+.task-pages span { font-size:12px; color:var(--color-text-muted); font-variant-numeric:tabular-nums; }
+.evidence-pages { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; padding:13px 0; }
+.evidence-pages span { font-size:12px; color:var(--color-text-muted); font-variant-numeric:tabular-nums; }
 .workflow-saved-item { border:1px solid var(--color-border); background:var(--color-success-soft); border-radius:12px; padding:16px; display:grid; gap:10px; min-width:0; }
 .workflow-saved-heading { display:flex; align-items:center; flex-wrap:wrap; gap:12px; justify-content:space-between; }
 .workflow-saved-heading strong { color:var(--color-text); font-size:12px; overflow-wrap:anywhere; }

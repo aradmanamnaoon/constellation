@@ -71,7 +71,8 @@ test('task provider choices are independent of chat and from other task cards', 
   assert.match(page, /\[task\.id\]: event\.currentTarget\.value/);
   assert.match(page, /taskProviderId\(task\)/);
   assert.match(page, /taskSearch\.trim\(\)\.toLocaleLowerCase\(\)/);
-  assert.match(page, /\{#each visibleRoomTasks as task \(task\.id\)\}/);
+  assert.match(page, /paginateLocal\(visibleRoomTasks, taskPage, taskPageSize\)/);
+  assert.match(page, /\{#each pagedRoomTasks as task \(task\.id\)\}/);
 });
 
 test('first-task setup offers working prerequisite actions and resumes the draft', () => {

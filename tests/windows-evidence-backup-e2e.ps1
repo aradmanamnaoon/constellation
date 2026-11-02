@@ -1034,6 +1034,24 @@ try {
       $idRecord = @($workflowRecords | Where-Object { $_.Name -match '^workflow-[0-9a-f]{8}-' } | Select-Object -First 1)
       if (-not $idRecord.Count) { throw 'Saved workflow ID not discoverable in UIA list.' }
       $result.workflow_plan_id = $idRecord[0].Name
+      # Verify the real native search control, not merely a source contract.
+      # It must locate the durable workflow by ID, produce a real no-match
+      # state, and recover after clearing the filter. No provider is called.
+      $findWorkflow = Ui-Wait $root 'Find workflow ID' 'workflow-id-search' 8
+      if ($null -eq $findWorkflow) { throw 'Native workflow history ID search control missing.' }
+      Ui-SetText $root $findWorkflow 'qa-unmatched-workflow-20261102'
+      Ui-Invoke (Ui-WaitEnabled $root 'Search' 8)
+      if ($null -eq (Ui-Wait $root 'No saved workflows match that ID search.' '' 8)) {
+        throw 'Native workflow search did not expose a real no-match state.'
+      }
+      Ui-Invoke (Ui-WaitEnabled $root 'Clear filter' 8)
+      $findWorkflow = Ui-Wait $root 'Find workflow ID' 'workflow-id-search' 8
+      if ($null -eq $findWorkflow) { throw 'Workflow search input did not survive clearing the filter.' }
+      Ui-SetText $root $findWorkflow $result.workflow_plan_id
+      Ui-Invoke (Ui-WaitEnabled $root 'Search' 8)
+      if ($null -eq (Ui-Wait $root $result.workflow_plan_id '' 8)) {
+        throw 'Native workflow search failed to rediscover the saved workflow by ID.'
+      }
       try { $result.screenshots += Capture-Window $hwnd 'workflow-saved' }
       catch { $result.blockers += "Workflow saved screenshot: $($_.Exception.Message)" }
       # Re-enter Tasks > Workflows to force a native list reload, not merely

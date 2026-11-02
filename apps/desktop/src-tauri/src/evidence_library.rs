@@ -38,7 +38,7 @@ fn limits() -> IndexLimits {
         max_chunks: 16_384,
         max_chunk_bytes: 1024,
         max_query_bytes: 2048,
-        max_top_k: 10,
+        max_top_k: 1_000,
     }
 }
 
@@ -270,7 +270,14 @@ pub(crate) fn delete(path: &Path, source_id: &str, expected_sha256: &str) -> Res
     tx.commit().map_err(|_| unavailable())
 }
 
-pub(crate) fn search(path: &Path, query: &str) -> Result<Value, String> {
+/// Bounded ranked search: return 10 verified-result candidates at a time,
+/// with one lookahead record. Pages are read-only; ranking is deterministic.
+/// The 1000-hit ceiling is explicit and prevents unbounded retrieval.
+pub(crate) fn search(path: &Path, query: &str, offset: usize) -> Result<Value, String> {
+    const PAGE_SIZE: usize = 10;
+    if offset > 990 || !offset.is_multiple_of(PAGE_SIZE) {
+        return Err("Invalid saved evidence result page".into());
+    }
     let mut db = open(path, false)?;
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Deferred)
@@ -278,10 +285,13 @@ pub(crate) fn search(path: &Path, query: &str) -> Result<Value, String> {
     let sources = read_sources(&tx)?;
     let index = index_sources(&sources)?;
     let hits = index
-        .search(query, 10)
+        .search(query, (offset + PAGE_SIZE + 1).min(1_000))
         .map_err(|_| "Search needs 1–2048 bytes of valid words".to_string())?;
+    let has_more = hits.len() > offset + PAGE_SIZE;
     let results = hits
         .into_iter()
+        .skip(offset)
+        .take(PAGE_SIZE)
         .map(|hit| {
             json!({
                 "source_id": hit.source_id, "relative_path": hit.relative_path,
@@ -292,7 +302,11 @@ pub(crate) fn search(path: &Path, query: &str) -> Result<Value, String> {
         })
         .collect::<Vec<_>>();
     tx.commit().map_err(|_| unavailable())?;
-    Ok(json!({"results": results, "stored": true, "model_called": false}))
+    Ok(
+        json!({"results": results, "stored": true, "model_called": false,
+        "offset": offset, "page_size": PAGE_SIZE, "has_more": has_more,
+        "max_ranked_hits": 1_000 }),
+    )
 }
 
 fn literal_quote_fence(quote: &str) -> String {
@@ -351,6 +365,50 @@ mod tests {
     use constellation_core::StudioStore;
 
     #[test]
+    fn saved_evidence_ranked_pages_do_not_hide_matches_after_first_ten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("studio.db");
+        StudioStore::open(&path).unwrap();
+        for n in 0..31 {
+            save(
+                &path,
+                &format!("Document {n}"),
+                &format!("hippocampus in sample {n}"),
+            )
+            .unwrap();
+        }
+        let mut seen = std::collections::HashSet::new();
+        for (offset, size, has_more) in [
+            (0, 10, true),
+            (10, 10, true),
+            (20, 10, true),
+            (30, 1, false),
+        ] {
+            let page = search(&path, "hippocampus", offset).unwrap();
+            assert_eq!(page["offset"], offset);
+            assert_eq!(page["page_size"], 10);
+            assert_eq!(page["has_more"], has_more);
+            assert_eq!(page["model_called"], false);
+            let rows = page["results"].as_array().unwrap();
+            assert_eq!(rows.len(), size);
+            for item in rows {
+                assert!(seen.insert(item["source_id"].as_str().unwrap().to_owned()));
+                assert!(item["quote"].as_str().unwrap().contains("hippocampus"));
+            }
+        }
+        assert_eq!(seen.len(), 31);
+        assert_eq!(
+            search(&path, "hippocampus", 40).unwrap()["results"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(search(&path, "hippocampus", 1).is_err());
+        assert!(search(&path, "hippocampus", 1_000).is_err());
+    }
+
+    #[test]
     fn explicit_saved_sources_survive_restart_and_retain_verbatim_offsets() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("studio.db");
@@ -360,7 +418,7 @@ mod tests {
         let a = save(&path, "Paper A", "The hippocampus supports memory.").unwrap();
         let b = save(&path, "Paper B", "The cortex processes signals.").unwrap();
         assert_ne!(a.source_id, b.source_id);
-        let results = search(&path, "hippocampus").unwrap();
+        let results = search(&path, "hippocampus", 0).unwrap();
         let hit = &results["results"][0];
         assert_eq!(hit["source_id"], a.source_id);
         assert_eq!(hit["quote"], "The hippocampus supports memory.");
@@ -387,7 +445,7 @@ mod tests {
         )
         .unwrap();
         assert!(load(&path, &saved.source_id).is_err());
-        assert!(search(&path, "forged").is_err());
+        assert!(search(&path, "forged", 0).is_err());
         assert!(save(&path, "Later", "Another valid statement.").is_err());
     }
 
@@ -430,13 +488,13 @@ mod tests {
         assert_eq!(list(&path).unwrap().len(), 1);
         assert_eq!(load(&path, &b.source_id).unwrap().text, b.text);
         assert!(
-            search(&path, "hippocampus").unwrap()["results"]
+            search(&path, "hippocampus", 0).unwrap()["results"]
                 .as_array()
                 .unwrap()
                 .is_empty()
         );
         assert_eq!(
-            search(&path, "cortex").unwrap()["results"][0]["source_id"],
+            search(&path, "cortex", 0).unwrap()["results"][0]["source_id"],
             b.source_id
         );
         drop(StudioStore::open(&path).expect("deletion must preserve Core schema"));

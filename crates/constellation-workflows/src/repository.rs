@@ -202,6 +202,46 @@ impl Repository {
         Ok(results)
     }
 
+    /// Literal case-insensitive ID filtering, bounded at the SQLite query
+    /// instead of loading all workflow history into the WebView. The bound
+    /// query uses instr (not LIKE), so '%' and '_' cannot act as wildcards.
+    pub fn list_matching_ids(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> RepositoryResult<Vec<StoredWorkflow>> {
+        if query.is_empty() {
+            return self.list(limit, offset);
+        }
+        if query.len() > 128
+            || query.chars().any(char::is_control)
+            || limit == 0
+            || limit > MAX_PAGE
+        {
+            return Err(RepositoryError::InvalidPage);
+        }
+        let limit = i64::try_from(limit).map_err(|_| RepositoryError::InvalidPage)?;
+        let offset = i64::try_from(offset).map_err(|_| RepositoryError::InvalidPage)?;
+        let mut connection = self.lock()?;
+        let tx = connection.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        let ids = {
+            let mut statement = tx.prepare(
+                "SELECT id FROM workflow_runs WHERE instr(lower(id), lower(?1)) > 0 ORDER BY id LIMIT ?2 OFFSET ?3",
+            )?;
+            let rows = statement
+                .query_map(params![query, limit, offset], |row| row.get::<_, String>(0))?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            rows
+        };
+        let mut results = Vec::with_capacity(ids.len());
+        for id in ids {
+            results.push(load(&tx, &id)?.ok_or(RepositoryError::CorruptRecord)?);
+        }
+        tx.commit()?;
+        Ok(results)
+    }
+
     /// Compare-and-swap the entire validated run in one IMMEDIATE transaction.
     /// The stored definition is immutable across revisions.
     pub fn update(

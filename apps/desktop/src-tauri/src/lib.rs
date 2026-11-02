@@ -963,8 +963,9 @@ fn studio_delete_saved_evidence(
 fn studio_search_saved_evidence(
     state: State<'_, StudioState>,
     query: String,
+    offset: Option<usize>,
 ) -> Result<Value, String> {
-    evidence_library::search(&state.database_path, &query)
+    evidence_library::search(&state.database_path, &query, offset.unwrap_or(0))
 }
 
 #[tauri::command]
@@ -1074,11 +1075,40 @@ fn studio_create_workflow(
 }
 
 #[tauri::command]
-fn studio_list_workflows(state: State<'_, StudioState>) -> Result<Value, String> {
-    let records = state
-        .workflows
-        .list(100, 0)
+fn studio_list_workflows(
+    state: State<'_, StudioState>,
+    offset: Option<usize>,
+    query: Option<String>,
+) -> Result<Value, String> {
+    list_workflow_page(
+        &state.workflows,
+        offset.unwrap_or(0),
+        query.as_deref().unwrap_or(""),
+    )
+}
+
+/// Bounded native pages backed by stable workflow-ID order. Fetching the
+/// 26th record distinguishes an exact full page from a page with successors.
+/// This lists only local committed data; it cannot invoke any provider.
+fn list_workflow_page(
+    workflows: &WorkflowRepository,
+    offset: usize,
+    query: &str,
+) -> Result<Value, String> {
+    const PAGE_SIZE: usize = 25;
+    const MAX_OFFSET: usize = 100_000;
+    if offset > MAX_OFFSET
+        || !offset.is_multiple_of(PAGE_SIZE)
+        || query.len() > 128
+        || query.chars().any(char::is_control)
+    {
+        return Err("Invalid saved workflow page".into());
+    }
+    let mut records = workflows
+        .list_matching_ids(query, PAGE_SIZE + 1, offset)
         .map_err(|_| "Could not read the locally saved workflows")?;
+    let has_more = records.len() > PAGE_SIZE;
+    records.truncate(PAGE_SIZE);
     Ok(json!({
         "items":records.iter().map(|record| json!({
             "definition":record.run.definition(),
@@ -1087,8 +1117,10 @@ fn studio_list_workflows(state: State<'_, StudioState>) -> Result<Value, String>
             "revision":record.revision,
             "cancelled":record.run.cancelled(),
         })).collect::<Vec<_>>(),
-        "max_items":100,
-        "has_more":records.len() == 100,
+        "max_items":PAGE_SIZE,
+        "offset":offset,
+        "query":query,
+        "has_more":has_more,
     }))
 }
 
@@ -5289,6 +5321,76 @@ mod tests {
                 .ready_steps()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn saved_workflow_pages_are_bounded_distinct_and_complete() {
+        let (dir, store) = store();
+        let repo = WorkflowRepository::open(dir.path().join("workflow-pages.sqlite3")).unwrap();
+        let agent = store.add_agent("Researcher", "Reader").unwrap();
+        let provider = ProviderId::new();
+        store
+            .save_provider_profile(ProviderProfile {
+                id: provider,
+                display_name: "Local test provider".into(),
+                model_id: "fixture".into(),
+                base_url: "http://127.0.0.1:11434/v1".into(),
+                kind: ProviderKind::OpenaiChat,
+                credentials: CredentialSource::None,
+            })
+            .unwrap();
+        for i in 0..51 {
+            let definition = json!({
+                "schema_version":1, "workflow_id":format!("workflow-{i:03}"),
+                "steps":[{
+                    "id":"research", "role":"Researcher",
+                    "agent_id":agent.id.to_string(), "provider_id":provider.to_string(),
+                    "instruction":"Local no-network planning", "depends_on":[], "max_attempts":2
+                }]
+            });
+            create_workflow_plan(&store, &repo, &definition.to_string()).unwrap();
+        }
+        let mut ids = Vec::new();
+        for (offset, expected_len, has_more) in [(0, 25, true), (25, 25, true), (50, 1, false)] {
+            let page = list_workflow_page(&repo, offset, "").unwrap();
+            assert_eq!(page["offset"], offset);
+            assert_eq!(page["max_items"], 25);
+            assert_eq!(page["has_more"], has_more);
+            let rows = page["items"].as_array().unwrap();
+            assert_eq!(rows.len(), expected_len);
+            for row in rows {
+                ids.push(
+                    row["definition"]["workflow_id"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                );
+            }
+        }
+        assert_eq!(ids.len(), 51);
+        assert_eq!(ids.first().unwrap(), "workflow-000");
+        assert_eq!(ids.last().unwrap(), "workflow-050");
+        assert_eq!(
+            list_workflow_page(&repo, 75, "").unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(list_workflow_page(&repo, 1, "").is_err());
+        assert!(list_workflow_page(&repo, 100_025, "").is_err());
+        let search = list_workflow_page(&repo, 0, "WORKFLOW-04").unwrap();
+        assert_eq!(search["items"].as_array().unwrap().len(), 10);
+        assert_eq!(search["has_more"], false);
+        assert_eq!(search["query"], "WORKFLOW-04");
+        assert_eq!(
+            list_workflow_page(&repo, 0, "%").unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(list_workflow_page(&repo, 0, "\n").is_err());
     }
 
     #[test]
