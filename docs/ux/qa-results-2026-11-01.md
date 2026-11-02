@@ -1,5 +1,7 @@
 # UX upgrade QA observations — 2026-11-01
 
+**Historical snapshot:** The later source-pinned Windows/Linux QA and Android diagnostic are documented in [`qa-results-2026-11-02.md`](qa-results-2026-11-02.md). The 2026-11-01 artifact hashes below are not the latest candidate.
+
 This document records actual checked observations. A built artifact is not a release acceptance claim; native session checks are distinguished from static tests and from local package metadata. All Windows app starts used a private Win32 desktop and separate disposable `--isolated-data-dir`; the user's normal Constellation data was not opened. Provider calls were not made.
 
 ## Windows (actual application and installed NSIS)
