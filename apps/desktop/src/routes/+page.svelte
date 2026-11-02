@@ -17,6 +17,7 @@
   import { prepareProviderRevision } from '../lib/provider-revision';
   import { paginateLocal } from '../lib/local-pagination';
   import { DraftPersistence, type DraftState, type StoredDraft } from '../lib/draft-persistence';
+  import { SerialAsyncQueue } from '../lib/serial-async-queue';
   import { composerEnterAction } from '../lib/composer-keyboard';
   import './studio.css';
 
@@ -295,6 +296,9 @@
   let chatScrollElement = $state<HTMLDivElement | null>(null);
   let chatNearBottom = $state(true);
   let unreadMessageCount = $state(0);
+  // Snapshot loads and DOM scroll reconciliation must not overlap: an older
+  // native IPC response could otherwise replace a later room/task update.
+  const refreshQueue = new SerialAsyncQueue();
 
   const room = $derived(snapshot.rooms.find((r) => r.id === roomId));
   const messages = $derived(snapshot.messages.filter((m) => m.room_id === roomId));
@@ -369,32 +373,36 @@
   }
 
   async function refresh() {
-    isNative = isTauri();
-    runtimeChecked = true;
-    if (!isNative) return;
-    try {
-      const previousRoomId = roomId;
-      const previousRoomMessageIds = new Set(snapshot.messages.filter((message) => message.room_id === previousRoomId).map((message) => message.id));
-      const stayAtBottom = chatNearBottom && messagePage === 0 && !messageQuery.trim();
-      const visibleAnchor = !stayAtBottom ? firstVisibleMessageAnchor() : null;
-      const next = await invoke<Snapshot>('studio_bootstrap');
-      snapshot = { ...next, tasks: next.tasks ?? [] };
-      if (!next.rooms.some((r) => r.id === roomId)) selectRoom(next.rooms[0]?.id ?? '');
-      if (selectedProviderId && selectedProviderId !== 'each-agent' && !next.providers.some((provider) => provider.id === selectedProviderId)) selectedProviderId = '';
-      if (taskFilterRoomId && !next.rooms.some((r) => r.id === taskFilterRoomId)) taskFilterRoomId = '';
-      if (screen === 'rooms') {
-        await tick();
-        if (previousRoomId !== roomId || stayAtBottom) scrollChatToBottom();
-        else {
-          restoreMessageAnchor(visibleAnchor);
-          const added = next.messages.filter((message) => message.room_id === roomId && !previousRoomMessageIds.has(message.id)).length;
-          if (added > 0) unreadMessageCount += added;
+    return refreshQueue.enqueue(async () => {
+      isNative = isTauri();
+      runtimeChecked = true;
+      if (!isNative) return;
+      try {
+        // Capture the current selection and scroll immediately before the
+        // ordered fetch, not when an earlier caller enqueued this refresh.
+        const previousRoomId = roomId;
+        const previousRoomMessageIds = new Set(snapshot.messages.filter((message) => message.room_id === previousRoomId).map((message) => message.id));
+        const stayAtBottom = chatNearBottom && messagePage === 0 && !messageQuery.trim();
+        const visibleAnchor = !stayAtBottom ? firstVisibleMessageAnchor() : null;
+        const next = await invoke<Snapshot>('studio_bootstrap');
+        snapshot = { ...next, tasks: next.tasks ?? [] };
+        if (!next.rooms.some((r) => r.id === roomId)) selectRoom(next.rooms[0]?.id ?? '');
+        if (selectedProviderId && selectedProviderId !== 'each-agent' && !next.providers.some((provider) => provider.id === selectedProviderId)) selectedProviderId = '';
+        if (taskFilterRoomId && !next.rooms.some((r) => r.id === taskFilterRoomId)) taskFilterRoomId = '';
+        if (screen === 'rooms') {
+          await tick();
+          if (previousRoomId !== roomId || stayAtBottom) scrollChatToBottom();
+          else {
+            restoreMessageAnchor(visibleAnchor);
+            const added = next.messages.filter((message) => message.room_id === roomId && !previousRoomMessageIds.has(message.id)).length;
+            if (added > 0) unreadMessageCount += added;
+          }
         }
+        error = '';
+      } catch (cause) {
+        error = `Could not open local workspace: ${String(cause)}`;
       }
-      error = '';
-    } catch (cause) {
-      error = `Could not open local workspace: ${String(cause)}`;
-    }
+    });
   }
   function chatScrollChanged(event: Event) {
     const element = event.currentTarget as HTMLDivElement;
