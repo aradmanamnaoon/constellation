@@ -4632,6 +4632,84 @@ mod tests {
     use sha2::Digest;
 
     #[test]
+    fn sqlite_snapshot_with_ten_thousand_messages_and_tasks_keeps_all_rows() {
+        // Bulk-insert synthetic *test-only* rows in one transaction to exercise
+        // the same production snapshot read/projection path without 20,000
+        // per-operation fsyncs or simulated provider/tool authorizations.
+        let (dir, store) = store();
+        let room = store.create_room("Large offline history").unwrap();
+        let agent = store.add_agent("Synthetic", "Offline reviewer").unwrap();
+        let mut connection = Connection::open(dir.path().join("studio.sqlite")).unwrap();
+        let tx = connection.transaction().unwrap();
+        for index in 0..10_000 {
+            let message = constellation_core::Message {
+                id: MessageId::new(),
+                room_id: room.id,
+                sender: MessageSender::Agent(agent.id),
+                content: format!("Offline history entry {index}"),
+                created_at_ms: index,
+            };
+            tx.execute(
+                "INSERT INTO messages (id, room_id, data) VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    message.id.to_string(),
+                    room.id.to_string(),
+                    serde_json::to_string(&message).unwrap()
+                ],
+            )
+            .unwrap();
+            let task = Task {
+                id: TaskId::new(),
+                room_id: room.id,
+                agent_id: agent.id,
+                instructions: format!("Local pending task {index}"),
+                state: TaskState::Pending,
+                failure_reason: None,
+                created_at_ms: index,
+                updated_at_ms: index,
+            };
+            tx.execute(
+                "INSERT INTO tasks (id, room_id, agent_id, data) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    task.id.to_string(),
+                    room.id.to_string(),
+                    agent.id.to_string(),
+                    serde_json::to_string(&task).unwrap()
+                ],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        drop(connection);
+        let started = std::time::Instant::now();
+        let view = snapshot_as_view(&store).unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(view["messages"].as_array().unwrap().len(), 10_000);
+        assert_eq!(view["tasks"].as_array().unwrap().len(), 10_000);
+        for index in [0, 99, 100, 5_000, 9_999] {
+            assert_eq!(
+                view["messages"][index]["body"],
+                format!("Offline history entry {index}")
+            );
+            assert_eq!(view["messages"][index]["sender_name"], "Offline reviewer");
+            assert_eq!(
+                view["tasks"][index]["instructions"],
+                format!("Local pending task {index}")
+            );
+        }
+        eprintln!(
+            "synthetic SQLite snapshot: 10,000 messages + 10,000 tasks projected in {:.3}s (not a performance SLA)",
+            elapsed.as_secs_f64()
+        );
+        // Reopen the exact database and verify the synthetic local rows still
+        // load. This is not evidence of normal audited write operations.
+        drop(store);
+        let reopened = StudioStore::open(dir.path().join("studio.sqlite")).unwrap();
+        assert_eq!(reopened.snapshot().unwrap().messages.len(), 10_000);
+        assert_eq!(reopened.snapshot().unwrap().tasks.len(), 10_000);
+    }
+
+    #[test]
     fn large_snapshot_preserves_ten_thousand_ordered_messages_and_sender_identity() {
         let room = RoomId::new();
         let agents = (0..200)
