@@ -14,6 +14,7 @@ param(
   [string]$OutputDirectory,
   [switch]$TestCommandPalette,
   [switch]$TestTaskJourney,
+  [switch]$TestRoomTeam,
   [switch]$TestProviderDirectory,
   [ValidateRange(800, 4096)][int]$ViewportWidth = 0,
   [ValidateRange(560, 2160)][int]$ViewportHeight = 0,
@@ -25,6 +26,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'Windows is required.' }
 if (($ViewportWidth -gt 0) -ne ($ViewportHeight -gt 0)) { throw 'ViewportWidth and ViewportHeight must be provided together.' }
+if ($TestRoomTeam -and -not $TestTaskJourney) { throw 'Room team native QA requires the isolated Task journey to create a room and agent first.' }
 
 $resolvedExe = (Resolve-Path -LiteralPath $ExePath -ErrorAction Stop).ProviderPath
 $exeFile = Get-Item -LiteralPath $resolvedExe
@@ -41,6 +43,7 @@ if (-not $HiddenDesktopWorkerName) {
     ScriptPath = $PSCommandPath; ExePath = $resolvedExe; TimeoutSeconds = $TimeoutSeconds
     ExpectedExeSha256 = $ExpectedExeSha256; TestCommandPalette = [bool]$TestCommandPalette
     TestTaskJourney = [bool]$TestTaskJourney; TestProviderDirectory = [bool]$TestProviderDirectory
+    TestRoomTeam = [bool]$TestRoomTeam
     ViewportWidth = $ViewportWidth; ViewportHeight = $ViewportHeight
     WebViewDeviceScaleFactor = $WebViewDeviceScaleFactor
   }
@@ -174,6 +177,7 @@ $result = [ordered]@{
   observed_controls = @()
   palette_result = if ($TestCommandPalette) { 'pending' } else { 'not_requested' }
   task_journey_result = if ($TestTaskJourney) { 'pending' } else { 'not_requested' }
+  room_team_result = if ($TestRoomTeam) { 'pending' } else { 'not_requested' }
   provider_directory_result = if ($TestProviderDirectory) { 'pending' } else { 'not_requested' }
   screenshot_path = $null
   screenshot_method = $null
@@ -472,6 +476,52 @@ db.close();
       throw 'Expected exactly one native persisted task in the disposable SQLite file.'
     }
     $result.task_journey_result = 'passed: native prerequisites, draft return, SQLite task, safe disabled Run, status and keyword filtering'
+    if ($TestRoomTeam) {
+      Invoke-UxControl (Find-ExactUxControl 'Rooms' 'ControlType.Button')
+      $found = $null
+      $deadline = [DateTime]::UtcNow.AddSeconds(8)
+      do {
+        foreach ($child in $root.FindAll($scope, [System.Windows.Automation.Condition]::TrueCondition)) {
+          try {
+            if ($child.Current.Name -match '^Agents.*1 selected.*Change room team') { $found = $child; break }
+          } catch {}
+        }
+        if ($null -ne $found) { break }
+        Start-Sleep -Milliseconds 150
+      } while ([DateTime]::UtcNow -lt $deadline)
+      if ($null -eq $found) { throw 'Room team expandable control was not discoverable in actual WebView2 UIA.' }
+      $expansion = $null
+      if (-not $found.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$expansion)) {
+        throw 'Room team control does not expose keyboard-accessible ExpandCollapsePattern.'
+      }
+      ([System.Windows.Automation.ExpandCollapsePattern]$expansion).Expand()
+      $member = Find-ExactUxControl 'Private UX analyst' 'ControlType.CheckBox'
+      $toggle = $null
+      if (-not $member.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$toggle)) {
+        throw 'Room member selection did not expose an accessible toggle.'
+      }
+      ([System.Windows.Automation.TogglePattern]$toggle).Toggle()
+      Invoke-UxControl (Find-ExactUxControl 'Save room team' 'ControlType.Button')
+      [void](Find-ExactUxControl 'This room team is saved on this device.')
+      $readRoom = @'
+const { DatabaseSync } = require("node:sqlite");
+const db = new DatabaseSync(process.argv[2], { readOnly: true });
+const rooms = db.prepare('SELECT data FROM rooms').all();
+if (rooms.length !== 1) process.exit(3);
+const room = JSON.parse(rooms[0].data);
+if (!Array.isArray(room.member_ids) || room.member_ids.length !== 0) process.exit(4);
+const recorded = db.prepare('SELECT kind FROM events').all()
+  .some(({kind}) => JSON.parse(kind).type === 'room_members_changed');
+db.close();
+if (!recorded) process.exit(5);
+console.log('PERSISTED_EMPTY_TEAM_AND_AUDIT_PASS');
+'@
+      $verification = $readRoom | node - $sqlitePath
+      if ($LASTEXITCODE -ne 0 -or [string]$verification -cne 'PERSISTED_EMPTY_TEAM_AND_AUDIT_PASS') {
+        throw 'Persisted room membership/audit did not match the user-initiated UI selection.'
+      }
+      $result.room_team_result = 'passed: native expandable team, accessible checkbox, explicit save and audited SQLite persisted empty membership'
+    }
   }
   if ($TestProviderDirectory) {
     if (-not $uiaAvailable -or -not $result.webview_ready) {
@@ -625,6 +675,6 @@ db.close();
 }
 
 $result | ConvertTo-Json -Depth 6
-if (-not $result.webview_ready -or $result.screenshot_status -ne 'captured_with_visual_detail' -or -not $result.process_closed -or ($ViewportWidth -gt 0 -and -not $result.viewport_resize_status.StartsWith('passed:')) -or ($TestCommandPalette -and -not $result.palette_result.StartsWith('passed:')) -or ($TestTaskJourney -and -not $result.task_journey_result.StartsWith('passed:')) -or ($TestProviderDirectory -and -not $result.provider_directory_result.StartsWith('passed:'))) {
+if (-not $result.webview_ready -or $result.screenshot_status -ne 'captured_with_visual_detail' -or -not $result.process_closed -or ($ViewportWidth -gt 0 -and -not $result.viewport_resize_status.StartsWith('passed:')) -or ($TestCommandPalette -and -not $result.palette_result.StartsWith('passed:')) -or ($TestTaskJourney -and -not $result.task_journey_result.StartsWith('passed:')) -or ($TestRoomTeam -and -not $result.room_team_result.StartsWith('passed:')) -or ($TestProviderDirectory -and -not $result.provider_directory_result.StartsWith('passed:'))) {
   exit 1
 }

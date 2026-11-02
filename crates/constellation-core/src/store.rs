@@ -336,6 +336,7 @@ impl StudioStore {
             id: room_id,
             title,
             created_at_ms: now_ms(),
+            member_ids: None,
         };
         if id_exists(&tx, "rooms", &room_id.to_string())? {
             return Err(CoreError::AlreadyExists("room"));
@@ -349,6 +350,61 @@ impl StudioStore {
             operation_id,
             &fingerprint,
             EventKind::RoomCreated { room_id: room.id },
+            &room,
+        )?;
+        tx.commit()?;
+        Ok(room)
+    }
+
+    /// Persist room-level agent routing with optimistic stale-write detection.
+    /// The selection does not grant model, file or permission capabilities.
+    /// A legacy room has None; an explicitly empty selection is Some([]).
+    pub fn set_room_members(
+        &self,
+        room_id: RoomId,
+        member_ids: Vec<AgentId>,
+        expected_member_ids: Option<Vec<AgentId>>,
+        operation_id: OperationId,
+    ) -> Result<Room> {
+        if member_ids.len() > 8 {
+            return Err(CoreError::InvalidInput(
+                "room team cannot exceed eight agents".into(),
+            ));
+        }
+        let mut unique = std::collections::HashSet::new();
+        if !member_ids.iter().all(|id| unique.insert(*id)) {
+            return Err(CoreError::InvalidInput("duplicate room team agent".into()));
+        }
+        let fingerprint = json!({
+            "op":"set_room_members", "room_id":room_id,
+            "member_ids":member_ids, "expected_member_ids":expected_member_ids,
+        });
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(result) = previous_result::<Room>(&tx, operation_id, &fingerprint)? {
+            return Ok(result);
+        }
+        let mut room: Room =
+            read_one(&tx, "rooms", &room_id.to_string())?.ok_or(CoreError::NotFound("room"))?;
+        if room.member_ids != expected_member_ids {
+            return Err(CoreError::OperationConflict);
+        }
+        for agent_id in &member_ids {
+            ensure_id(&tx, "agents", &agent_id.to_string(), "agent")?;
+        }
+        room.member_ids = Some(member_ids.clone());
+        tx.execute(
+            "UPDATE rooms SET data=?2 WHERE id=?1",
+            params![room_id.to_string(), serde_json::to_string(&room)?],
+        )?;
+        record_event(
+            &tx,
+            operation_id,
+            &fingerprint,
+            EventKind::RoomMembersChanged {
+                room_id,
+                member_ids,
+            },
             &room,
         )?;
         tx.commit()?;
@@ -833,6 +889,7 @@ fn read_one<T: DeserializeOwned>(
     id: &str,
 ) -> Result<Option<T>> {
     let sql = match table {
+        "rooms" => "SELECT data FROM rooms WHERE id = ?1",
         "tasks" => "SELECT data FROM tasks WHERE id = ?1",
         "agents" => "SELECT data FROM agents WHERE id = ?1",
         _ => return Err(CoreError::InvalidInput("unknown table".into())),

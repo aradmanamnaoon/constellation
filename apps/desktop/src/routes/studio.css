@@ -211,6 +211,8 @@ h1,h2 { font-family:'Segoe UI', system-ui, sans-serif; }
 .agent-options label { display:flex; gap:6px; align-items:center; border:1px solid var(--color-border); border-radius:7px; padding:5px 8px; background:var(--color-surface-raised); color:var(--color-text); font-size:11px; cursor:pointer; }
 .agent-options label.chosen { background:var(--color-surface-selected); color:var(--color-action); border-color:var(--color-border-strong); }
 .agent-options input { accent-color:var(--color-action); margin:0; }
+.room-team-controls { display:flex; align-items:center; flex-wrap:wrap; gap:9px; padding:9px 0 3px; }
+.room-team-controls > span { flex:1 1 170px; color:var(--color-text-muted); font-size:11px; line-height:1.5; }
 .reply-help { margin:7px 2px 0; color:var(--color-text-muted); font-size:11px; line-height:1.5; }
 .text-button { padding:0; border:0; background:none; color:var(--color-text); font-weight:800; text-decoration:underline; }
 .reply-results { margin-top:10px; padding:11px 13px; background:var(--color-surface-alt); border:1px solid var(--color-border); border-radius:10px; font-size:11px; }

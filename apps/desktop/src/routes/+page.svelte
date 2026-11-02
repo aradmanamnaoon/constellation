@@ -18,7 +18,7 @@
   import './studio.css';
 
   type Screen = 'home' | 'rooms' | 'tasks' | 'evidence' | 'library' | 'settings';
-  type Room = { id: string; name: string; description: string; member_ids: string[] };
+  type Room = { id: string; name: string; description: string; member_ids: string[]; members_configured?: boolean };
   type Agent = { id: string; name: string; role: string; provider_id?: string | null };
   type ChatMessage = { id: string; room_id: string; sender_kind: 'user' | 'agent' | 'system'; sender_name: string; body: string; created_at: number | string; simulated?: boolean };
   type ProviderKind = 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'google_gemini' | 'ollama_native' | 'custom_compatible';
@@ -267,7 +267,8 @@
   const maxMessagePage = $derived(Math.max(0, Math.ceil(matchingMessages.length / messagePageSize) - 1));
   const visibleMessageEnd = $derived(Math.max(0, matchingMessages.length - Math.min(messagePage, maxMessagePage) * messagePageSize));
   const visibleMessages = $derived(matchingMessages.slice(Math.max(0, visibleMessageEnd - messagePageSize), visibleMessageEnd));
-  const selectedAgentIds = $derived((selectedAgentsByRoom[roomId] ?? snapshot.agents.slice(0, 1).map((agent) => agent.id)).filter((id) => snapshot.agents.some((agent) => agent.id === id)));
+  const selectedAgentIds = $derived((selectedAgentsByRoom[roomId] ?? (room?.members_configured ? room.member_ids : snapshot.agents.slice(0, 1).map((agent) => agent.id))).filter((id) => snapshot.agents.some((agent) => agent.id === id)));
+  const unsavedRoomTeam = $derived(roomId !== '' && selectedAgentsByRoom[roomId] !== undefined);
   const selectedProvider = $derived(snapshot.providers.find((provider) => provider.id === selectedProviderId));
   const providerPreset = $derived(providerPresets[providerKind]);
   const documentBytes = $derived(utf8Bytes(evidenceText));
@@ -448,6 +449,30 @@
   function toggleAgent(id: string, checked: boolean) {
     const ids = checked ? [...new Set([...selectedAgentIds, id])] : selectedAgentIds.filter((selected) => selected !== id);
     selectedAgentsByRoom = { ...selectedAgentsByRoom, [roomId]: ids };
+  }
+
+  async function saveRoomTeam() {
+    if (!isNative || working || replyBusy || busy || !room || !unsavedRoomTeam || selectedAgentIds.length > 8) return;
+    const targetRoomId = room.id;
+    const memberIds = [...selectedAgentIds];
+    working = true; error = '';
+    try {
+      await invoke('studio_set_room_members', {
+        roomId: targetRoomId, memberIds,
+        expectedMemberIds: room.members_configured ? room.member_ids : null,
+      });
+      // Discard the draft only for the room saved. Concurrent room selection
+      // or new checkbox input must not be clobbered by a stale IPC response.
+      if (JSON.stringify(selectedAgentsByRoom[targetRoomId]) === JSON.stringify(memberIds)) {
+        const remaining = { ...selectedAgentsByRoom };
+        delete remaining[targetRoomId];
+        selectedAgentsByRoom = remaining;
+      }
+      await refresh();
+      notice = 'Room team saved locally. This selection does not grant model or tool permissions.';
+    } catch {
+      error = 'Could not save room team. Another window may have changed it; reload the room before retrying. No model request was sent.';
+    } finally { working = false; }
   }
 
   // The Rust command reports one outcome per agent. Missing/invalid outcomes
@@ -2207,14 +2232,21 @@
                 <div class="reply-actions"><button type="button" class="soft-button small" disabled={!canAsk} onclick={() => void askAgents('selected')}>Ask selected</button><button type="button" class="primary-button small" disabled={!canAsk || selectedAgentIds.length > 8} onclick={() => void askAgents('team')}>Ask team ({selectedAgentIds.length})</button></div>
               </div>
               {#if snapshot.agents.length > 0}
-                <details class="reply-agent-picker"><summary>Agents · {selectedAgentIds.length} selected <span>Change team</span></summary>
+                <details class="reply-agent-picker"><summary>Agents · {selectedAgentIds.length} selected <span>{unsavedRoomTeam ? 'Unsaved team' : 'Change room team'}</span></summary>
                   <fieldset class="reply-agents" disabled={!isNative || busy || replyBusy}>
                     <legend>Choose one or more agents</legend>
                     <div class="agent-options">{#each snapshot.agents as agent (agent.id)}<label class:chosen={selectedAgentIds.includes(agent.id)}><input type="checkbox" checked={selectedAgentIds.includes(agent.id)} onchange={(event) => toggleAgent(agent.id, event.currentTarget.checked)}/><span>{agent.name}</span></label>{/each}</div>
                   </fieldset>
+                  <div class="room-team-controls">
+                    <span role="status">{unsavedRoomTeam ? 'Changes apply to this room now but are not yet saved for the next launch.' : room?.members_configured ? 'This room team is saved on this device.' : 'This older room has no saved team yet; the first agent is suggested.'}</span>
+                    {#if unsavedRoomTeam}
+                      <button type="button" class="soft-button small" disabled={!isNative || working || busy || replyBusy || selectedAgentIds.length > 8} onclick={() => void saveRoomTeam()}>Save room team</button>
+                      <button type="button" class="text-button" disabled={working} onclick={() => { const next = { ...selectedAgentsByRoom }; delete next[roomId]; selectedAgentsByRoom = next; }}>Discard changes</button>
+                    {/if}
+                  </div>
                 </details>
                 <label class="reply-stream-toggle"><input type="checkbox" bind:checked={streamAnswers} disabled={!isNative || replyBusy} /><span>Show a live text preview as the model responds (supported providers)</span></label>
-                <p class="reply-help">Ask selected contacts the first checked agent. Ask team contacts every checked agent (up to 8). Choose one provider for the team or use the distinct models saved for each agent. Your room context will be sent to every provider contacted.</p>
+                <p class="reply-help">Ask selected contacts the first checked agent. Ask team contacts every checked agent (up to 8). Save the room team to keep your selection after reopening. Team membership is a routing preference, not access control or a tool permission. Your room context will be sent to every provider you explicitly contact.</p>
               {:else}<p class="reply-help">No agents yet. <button type="button" class="text-button" onclick={() => (dialog = 'new-agent')}>Add a teammate</button> before requesting AI replies.</p>{/if}
               {#if snapshot.providers.length === 0}<p class="reply-help">No model providers configured. <button type="button" class="text-button" onclick={openProviderDialog}>Connect a model</button> to ask your team.</p>{/if}
               {#if usingAgentProviders && !assignedProvidersReady}<p class="reply-warning" role="status">Assign an existing model to every selected agent in Settings before using individual model routing.</p>{/if}

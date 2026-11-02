@@ -11,6 +11,69 @@ fn store() -> (tempfile::TempDir, StudioStore) {
 }
 
 #[test]
+fn room_team_members_are_durable_audited_idempotent_and_legacy_compatible() {
+    let (temp, db) = store();
+    let room = db.create_room("Research").unwrap();
+    assert_eq!(room.member_ids, None);
+    let a = db.add_agent("Reviewer", "Alice").unwrap();
+    let b = db.add_agent("Planner", "Bob").unwrap();
+    let op = OperationId::new();
+    let updated = db
+        .set_room_members(room.id, vec![a.id, b.id], None, op)
+        .unwrap();
+    assert_eq!(updated.member_ids, Some(vec![a.id, b.id]));
+    assert_eq!(
+        db.set_room_members(room.id, vec![a.id, b.id], None, op)
+            .unwrap(),
+        updated
+    );
+    assert!(matches!(
+        db.set_room_members(room.id, vec![b.id], None, OperationId::new()),
+        Err(CoreError::OperationConflict)
+    ));
+    assert!(matches!(
+        db.set_room_members(
+            room.id,
+            vec![a.id, a.id],
+            Some(vec![a.id, b.id]),
+            OperationId::new()
+        ),
+        Err(CoreError::InvalidInput(_))
+    ));
+    assert!(matches!(
+        db.set_room_members(
+            room.id,
+            vec![AgentId::new()],
+            Some(vec![a.id, b.id]),
+            OperationId::new()
+        ),
+        Err(CoreError::NotFound("agent"))
+    ));
+    assert!(matches!(db.events().unwrap().last().unwrap().kind,
+        EventKind::RoomMembersChanged { room_id, ref member_ids }
+        if room_id == room.id && member_ids == &vec![a.id, b.id]));
+    drop(db);
+    let reopened = StudioStore::open(temp.path().join("config/studio.sqlite")).unwrap();
+    assert_eq!(
+        reopened.snapshot().unwrap().rooms[0].member_ids,
+        Some(vec![a.id, b.id])
+    );
+    let cleared = reopened
+        .set_room_members(room.id, vec![], Some(vec![a.id, b.id]), OperationId::new())
+        .unwrap();
+    assert_eq!(cleared.member_ids, Some(vec![]));
+    assert!(matches!(
+        reopened.set_room_members(
+            room.id,
+            vec![b.id],
+            Some(vec![a.id, b.id]),
+            OperationId::new()
+        ),
+        Err(CoreError::OperationConflict)
+    ));
+}
+
+#[test]
 fn agent_provider_preference_is_durable_validated_and_idempotent() {
     let (dir, db) = store();
     let agent = db.add_agent("Researcher", "Scout").unwrap();

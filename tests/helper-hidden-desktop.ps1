@@ -209,6 +209,7 @@ function Invoke-ConstellationHiddenDesktopWorker {
     [switch]$TestNativeConsent,
     [switch]$TestCommandPalette,
     [switch]$TestTaskJourney,
+    [switch]$TestRoomTeam,
     [switch]$TestProviderDirectory,
     [int]$ViewportWidth,
     [int]$ViewportHeight,
@@ -231,6 +232,7 @@ function Invoke-ConstellationHiddenDesktopWorker {
   if ($TestNativeConsent) { $scriptLine += ' -TestNativeConsent' }
   if ($TestCommandPalette) { $scriptLine += ' -TestCommandPalette' }
   if ($TestTaskJourney) { $scriptLine += ' -TestTaskJourney' }
+  if ($TestRoomTeam) { $scriptLine += ' -TestRoomTeam' }
   if ($TestProviderDirectory) { $scriptLine += ' -TestProviderDirectory' }
   if ($ViewportWidth -gt 0 -and $ViewportHeight -gt 0) { $scriptLine += " -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight" }
   if ($WebViewDeviceScaleFactor -eq 2) { $scriptLine += ' -WebViewDeviceScaleFactor 2' }

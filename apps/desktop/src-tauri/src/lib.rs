@@ -717,7 +717,7 @@ fn snapshot_as_view(store: &StudioStore) -> Result<Value, String> {
     let rooms = snapshot
         .rooms
         .iter()
-        .map(|room| json!({"id":room.id, "name":room.title, "description":"", "member_ids":[]}))
+        .map(|room| json!({"id":room.id, "name":room.title, "description":"", "member_ids":room.member_ids.clone().unwrap_or_default(), "members_configured":room.member_ids.is_some()}))
         .collect::<Vec<_>>();
     let messages = snapshot
         .messages
@@ -1829,6 +1829,34 @@ fn restore_encrypted_backup(
 }
 
 #[tauri::command]
+fn studio_set_room_members(
+    state: State<'_, StudioState>,
+    room_id: String,
+    member_ids: Vec<String>,
+    expected_member_ids: Option<Vec<String>>,
+) -> Result<Value, String> {
+    let room_id: RoomId = room_id.parse().map_err(|_| "Invalid room ID")?;
+    let member_ids: Vec<AgentId> = member_ids
+        .into_iter()
+        .map(|id| id.parse().map_err(|_| "Invalid agent ID".into()))
+        .collect::<Result<_, String>>()?;
+    let expected: Option<Vec<AgentId>> = expected_member_ids
+        .map(|ids| {
+            ids.into_iter()
+                .map(|id| id.parse().map_err(|_| "Invalid agent ID".into()))
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .transpose()?;
+    let updated = state
+        .store
+        .set_room_members(room_id, member_ids, expected, OperationId::new())
+        .map_err(err)?;
+    Ok(
+        json!({"id":updated.id, "member_ids":updated.member_ids.unwrap_or_default(), "members_configured":true}),
+    )
+}
+
+#[tauri::command]
 fn studio_create_room(
     state: State<'_, StudioState>,
     title: String,
@@ -1845,7 +1873,9 @@ fn studio_create_room(
         _ => return Err("Both roomId and operationId are required for a retryable command".into()),
     }
     .map_err(err)?;
-    Ok(json!({"id":room.id,"name":room.title,"description":"","member_ids":[]}))
+    Ok(
+        json!({"id":room.id,"name":room.title,"description":"","member_ids":[],"members_configured":false}),
+    )
 }
 
 /// Identical provider profiles reuse one ID and the attached session credential.
@@ -4327,6 +4357,7 @@ pub fn run() {
             studio_create_project_archive,
             studio_restore_project_archive,
             studio_create_room,
+            studio_set_room_members,
             studio_add_agent,
             studio_set_agent_provider,
             studio_send_message,
