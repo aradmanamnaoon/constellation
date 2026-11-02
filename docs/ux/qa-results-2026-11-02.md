@@ -16,6 +16,8 @@
 | `git diff --cached --check` | PASS for reviewed UX/QA changes |
 | Rust library, clippy, formatting | Earlier PASS, 130/130 Rust library tests and strict clippy/fmt on production Rust unchanged by these UX commits; these are not a new full cross-platform Rust test run |
 
+On 2026-11-02, `cargo test --lib --locked` was repeated in the actual Tauri crate and **130/130 passed**; `cargo clippy --all-targets --locked -- -D warnings` was repeated and **passed**. These checks did not alter production Rust sources.
+
 ## Windows native build, installation and execution
 
 | Artifact | Exact SHA-256 | Bytes | Signature |
@@ -48,7 +50,16 @@ Fresh `scripts/qa/rebuild-local-linux-ux.sh deb,appimage`: **PASS** with the sam
 - `.deb`: `~/.cache/constellation-linux-packages/run.ux-20261102065901-3389/isolated-gui/screenshot.png` inside the private WSL Ubuntu home
 - `.AppImage`: `~/.cache/constellation-linux-packages/run.ux-appimage-20261102065916-3740/isolated-gui-appimage/screenshot.png` inside the private WSL Ubuntu home
 
-Missing: clean Debian/Ubuntu installed upgrade/uninstall validation, Linux accessibility/AT-SPI, native provider and recovery parity, and AppImage normal FUSE-mount execution (current test used `APPIMAGE_EXTRACT_AND_RUN=1`).
+The initial AppImage test above used `APPIMAGE_EXTRACT_AND_RUN=1`; an additional real-FUSE test subsequently passed, as documented below. Clean Debian/Ubuntu upgrade/uninstall validation, Linux accessibility/AT-SPI, and native provider/recovery parity remain unverified.
+
+### Additional actual Linux package verification (2026-11-02)
+
+Two new reproducible QA scripts exercise the exact final package SHA values without modifying the system package manager or visible desktop:
+
+- `scripts/qa/run-local-linux-rootless-dpkg.sh`: **PASS**. The inspected `.deb` control archive contained no maintainer hooks, the package (`constellation` 0.1.2 amd64) was unpacked using a disposable private `dpkg --root` database and unprivileged account, and the installed executable matched an independently extracted package binary byte-for-byte. Output included `ROOTLESS_DPKG_UNPACK_PASS`, package SHA `77f448565d9f15c81790ab107d0aef9e847e7338c23b4234711d404200ad2a8e`, installed ELF SHA `bbe3bcc8611c5fde32a5334b734c4d01a73a43e1f6a731a3b3e86935824ab878`.
+- `scripts/qa/run-local-linux-appimage-fuse-smoke.sh`: **PASS**. Normal kernel FUSE AppImage launch (without `APPIMAGE_EXTRACT_AND_RUN`) inside disposable Xvfb HOME, same original AppImage SHA `057bf842d5aa8bd1aa1a60f10c8713ab98653742e6e06aa68e68ea8630fdcff8`. Observed `GUI_WINDOW_VISIBLE=YES`, `GUI_WORKSPACE_RENDERED=YES` and screenshot viewport entropy `0.28195`, evidence under the private WSL Ubuntu home `~/.cache/constellation-linux-packages/run.ux-fuse-20261102072550-317/isolated-gui-appimage-fuse/`.
+
+These additional checks close earlier **rootless dpkg unpack** and **normal FUSE AppImage runtime** gaps. They do not establish a configured install on a pristine Debian 12/Ubuntu 24.04 VM, host package upgrade/uninstall, AT-SPI, or provider/recovery feature parity.
 
 ## Android: debug diagnostic only
 
