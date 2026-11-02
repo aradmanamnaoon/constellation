@@ -14,6 +14,7 @@ param(
   [string]$OutputDirectory,
   [switch]$TestCommandPalette,
   [switch]$TestTaskJourney,
+  [switch]$TestProviderDirectory,
   [ValidateRange(800, 4096)][int]$ViewportWidth = 0,
   [ValidateRange(560, 2160)][int]$ViewportHeight = 0,
   [ValidateSet(1, 2)][int]$WebViewDeviceScaleFactor = 1,
@@ -39,7 +40,8 @@ if (-not $HiddenDesktopWorkerName) {
   $workerParams = @{
     ScriptPath = $PSCommandPath; ExePath = $resolvedExe; TimeoutSeconds = $TimeoutSeconds
     ExpectedExeSha256 = $ExpectedExeSha256; TestCommandPalette = [bool]$TestCommandPalette
-    TestTaskJourney = [bool]$TestTaskJourney; ViewportWidth = $ViewportWidth; ViewportHeight = $ViewportHeight
+    TestTaskJourney = [bool]$TestTaskJourney; TestProviderDirectory = [bool]$TestProviderDirectory
+    ViewportWidth = $ViewportWidth; ViewportHeight = $ViewportHeight
     WebViewDeviceScaleFactor = $WebViewDeviceScaleFactor
   }
   if ($OutputDirectory) {
@@ -172,6 +174,7 @@ $result = [ordered]@{
   observed_controls = @()
   palette_result = if ($TestCommandPalette) { 'pending' } else { 'not_requested' }
   task_journey_result = if ($TestTaskJourney) { 'pending' } else { 'not_requested' }
+  provider_directory_result = if ($TestProviderDirectory) { 'pending' } else { 'not_requested' }
   screenshot_path = $null
   screenshot_method = $null
   screenshot_distinct_sample_colors = $null
@@ -470,6 +473,66 @@ db.close();
     }
     $result.task_journey_result = 'passed: native prerequisites, draft return, SQLite task, safe disabled Run, status and keyword filtering'
   }
+  if ($TestProviderDirectory) {
+    if (-not $uiaAvailable -or -not $result.webview_ready) {
+      throw 'Provider directory requires an actual WebView2/UIA tree.'
+    }
+    Assert-ConstellationHiddenDesktop $HiddenDesktopWorkerName
+    Assert-ConstellationHiddenWindow $hwnd $HiddenDesktopWorkerName
+    $root = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    $scope = [System.Windows.Automation.TreeScope]::Descendants
+    $nameProperty = [System.Windows.Automation.AutomationElement]::NameProperty
+    function Find-ProviderControl([string]$name, [string]$type = '', [int]$timeout = 8) {
+      $deadline = [DateTime]::UtcNow.AddSeconds($timeout)
+      do {
+        $matches = @()
+        foreach ($child in $root.FindAll($scope, [System.Windows.Automation.Condition]::TrueCondition)) {
+          try {
+            if ($child.Current.Name -ceq $name -and (!$type -or $child.Current.ControlType.ProgrammaticName -ceq $type)) {
+              $matches += $child
+            }
+          } catch { }
+        }
+        if ($matches.Count -eq 1) { return $matches[0] }
+        if ($matches.Count -gt 1) { throw "Ambiguous provider UIA element '$name' ($($matches.Count))." }
+        Start-Sleep -Milliseconds 170
+      } while ([DateTime]::UtcNow -lt $deadline)
+      throw "Provider UIA element missing: '$name'."
+    }
+    function Invoke-ProviderControl([string]$name) {
+      $button = Find-ProviderControl $name
+      $value = $null
+      if (-not $button.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern, [ref]$value)) {
+        throw "Provider control cannot be invoked: '$name'."
+      }
+      ([System.Windows.Automation.InvokePattern]$value).Invoke()
+    }
+    function Set-ProviderValue([string]$name, [string]$value) {
+      $input = Find-ProviderControl $name 'ControlType.Edit'
+      $pattern = $null
+      if (-not $input.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) {
+        throw "Provider input does not expose ValuePattern: '$name'."
+      }
+      $vp = [System.Windows.Automation.ValuePattern]$pattern
+      if ($vp.Current.IsReadOnly) { throw "Provider input is read-only: '$name'." }
+      $vp.SetValue($value)
+    }
+    # Save only a dummy loopback profile in this private database. No key,
+    # probe, model request, external connection or credentials are used.
+    Invoke-ProviderControl 'Settings'
+    Invoke-ProviderControl 'Add provider'
+    [void](Find-ProviderControl 'Bring your own model.')
+    Set-ProviderValue 'DISPLAY NAME' 'QA isolated local model'
+    Set-ProviderValue 'MODEL IDENTIFIER' 'qa-disabled-model'
+    Invoke-ProviderControl 'Save connection locally'
+    [void](Find-ProviderControl 'QA isolated local model')
+    [void](Find-ProviderControl 'Not tested in this session')
+    Set-ProviderValue 'Find a provider' 'definitely-not-a-provider'
+    [void](Find-ProviderControl 'No providers match these local filters. Clear the search or choose All.')
+    Set-ProviderValue 'Find a provider' 'qa-disabled-model'
+    [void](Find-ProviderControl 'QA isolated local model')
+    $result.provider_directory_result = 'passed: local dummy profile saved, native UIA search matches and no-match state, no network action'
+  }
 
   $rect = New-Object ConstellationInstalledWin32+Rect
   if (-not [ConstellationInstalledWin32]::GetWindowRect($hwnd, [ref]$rect)) {
@@ -539,6 +602,6 @@ db.close();
 }
 
 $result | ConvertTo-Json -Depth 6
-if (-not $result.webview_ready -or $result.screenshot_status -ne 'captured_with_visual_detail' -or -not $result.process_closed -or ($ViewportWidth -gt 0 -and -not $result.viewport_resize_status.StartsWith('passed:')) -or ($TestCommandPalette -and -not $result.palette_result.StartsWith('passed:')) -or ($TestTaskJourney -and -not $result.task_journey_result.StartsWith('passed:'))) {
+if (-not $result.webview_ready -or $result.screenshot_status -ne 'captured_with_visual_detail' -or -not $result.process_closed -or ($ViewportWidth -gt 0 -and -not $result.viewport_resize_status.StartsWith('passed:')) -or ($TestCommandPalette -and -not $result.palette_result.StartsWith('passed:')) -or ($TestTaskJourney -and -not $result.task_journey_result.StartsWith('passed:')) -or ($TestProviderDirectory -and -not $result.provider_directory_result.StartsWith('passed:'))) {
   exit 1
 }

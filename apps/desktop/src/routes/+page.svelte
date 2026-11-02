@@ -13,6 +13,7 @@
   import { filterWorkspaceRooms, type WorkspaceAction } from '../lib/workspace-navigation';
   import { filterRoleLibrary, roleCategories } from '../lib/role-library';
   import { splitChatBlocks } from '../lib/chat-format';
+  import { filterProviderDirectory, type ProviderStatusFilter } from '../lib/provider-directory';
   import './studio.css';
 
   type Screen = 'home' | 'rooms' | 'tasks' | 'evidence' | 'library' | 'settings';
@@ -140,6 +141,8 @@
   let providerRememberKey = $state(false);
   let probeBusyId = $state('');
   let probeResults = $state<Record<string, ProviderProbe | { status: 'request_error'; message: string }>>({});
+  let providerSearch = $state('');
+  let providerStatusFilter = $state<ProviderStatusFilter>('all');
   let taskRoomId = $state('');
   let taskFilterRoomId = $state('');
   let taskSearch = $state('');
@@ -311,6 +314,7 @@
   const filteredRoles = $derived(filterRoleLibrary(starterRoles, search, roleCategory));
   const visibleRoles = $derived(filteredRoles.slice(0, rolePageSize));
   const filteredRooms = $derived(filterWorkspaceRooms(snapshot.rooms, roomSearch));
+  const filteredProviders = $derived(filterProviderDirectory(snapshot.providers, probeResults, providerSearch, providerStatusFilter));
 
   function timeDisplay(value: number | string): string {
     // Rust serializes created_at_ms as a number; historical ISO strings also work.
@@ -2713,19 +2717,33 @@
           </div>
         </div>
         <p class="provider-probe-note">Testing is optional and sends one small text prompt to the explicitly selected provider. An API may charge for this request. A passing test does not prove tool calling, streaming, or structured output.</p>
+        {#if snapshot.providers.length}
+          <div class="provider-directory-controls" role="search" aria-label="Find configured AI providers">
+            <label for="provider-directory-search">Find a provider</label>
+            <input id="provider-directory-search" type="search" placeholder="Name, model, endpoint…" autocomplete="off" bind:value={providerSearch} />
+            <label for="provider-directory-status">Text-test status</label>
+            <select id="provider-directory-status" bind:value={providerStatusFilter}>
+              <option value="all">All</option>
+              <option value="untested">Not tested in this session</option>
+              <option value="text-compatible">Text test passed</option>
+              <option value="attention">Text test needs attention</option>
+            </select>
+            <span role="status">{filteredProviders.length} of {snapshot.providers.length} profiles shown</span>
+          </div>
+        {/if}
         <div class="provider-list">
-          {#each snapshot.providers as provider (provider.id)}
+          {#each filteredProviders as provider (provider.id)}
             {@const result = probeResults[provider.id]}
             <div class="provider-row">
               <div class="provider-symbol"><Cpu size={18}/></div>
-              <div><strong>{provider.name}</strong><span>{providerKindLabel(provider.kind)} · {provider.model}</span><span class="provider-endpoint" title={provider.endpoint}>{provider.endpoint}</span><span>{provider.remembered_key ? 'API key reference saved in OS credential manager' : 'No persistent API key in this profile'}</span></div>
+              <div><strong>{provider.name}</strong><span>{providerKindLabel(provider.kind)} · {provider.model}</span><span class="provider-endpoint" title={provider.endpoint}>{provider.endpoint}</span><span>{provider.remembered_key ? 'API key reference saved in OS credential manager' : 'No persistent API key in this profile'}</span><span class="provider-verification">{result?.status === 'compatible_text' ? 'Text test passed in this session only' : result ? 'Text test needs attention' : 'Not tested in this session'}</span></div>
               <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} onclick={() => void testProvider(provider.id)}>{probeBusyId === provider.id ? 'Testing…' : 'Test text chat'}</button>
             </div>
             {#if result}
               <p class="provider-probe-result" role="status">Text-only test: {result.status === 'compatible_text' ? 'Compatible for this one response' : result.status === 'request_error' ? result.message : result.status.replaceAll('_', ' ')}{#if 'http_status' in result && result.http_status} · HTTP {result.http_status}{/if}. No tool or streaming support was verified.</p>
             {/if}
           {:else}
-            <div class="provider-none">No AI providers are configured yet.</div>
+            <div class="provider-none">{snapshot.providers.length ? 'No providers match these local filters. Clear the search or choose All.' : 'No AI providers are configured yet.'}</div>
           {/each}
         </div>
         <section class="agent-routing" aria-label="Assign models to agents">
