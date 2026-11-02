@@ -17,6 +17,7 @@
   import { prepareProviderRevision } from '../lib/provider-revision';
   import { paginateLocal } from '../lib/local-pagination';
   import { DraftPersistence, type DraftState, type StoredDraft } from '../lib/draft-persistence';
+  import { composerEnterAction } from '../lib/composer-keyboard';
   import './studio.css';
 
   type Screen = 'home' | 'rooms' | 'tasks' | 'evidence' | 'library' | 'settings';
@@ -117,6 +118,10 @@
   let snapshot = $state<Snapshot>({ rooms: [], agents: [], messages: [], providers: [], tasks: [] });
   let roomId = $state('');
   let draft = $state('');
+  // Keep composition state outside persistence: composing text is still sent
+  // to the normal native-backed draft autosave path through `oninput`.
+  let composerCompositionActive = false;
+  let composerLastCompositionEnd: number | null = null;
   let draftsByRoom = $state<Record<string, string>>({});
   let draftReady = $state(false);
   let draftLoadError = $state('');
@@ -443,6 +448,12 @@
     draft = value;
     draftsByRoom = { ...draftsByRoom, [roomId]: value };
     draftPersistence.change(roomId, value);
+  }
+  function handleComposerKeydown(event: KeyboardEvent) {
+    const action = composerEnterAction(event, composerCompositionActive, composerLastCompositionEnd);
+    if (action === 'keep-editing') return;
+    event.preventDefault();
+    if (action === 'send') void sendMessage();
   }
   async function restoreSavedDraft() {
     const target = roomId;
@@ -2467,7 +2478,7 @@
           </div>
           <div class="composer-container">
             <form class="composer" onsubmit={(event) => {event.preventDefault(); void sendMessage();}}>
-              <textarea bind:value={draft} disabled={busy || replyBusy || !isNative || !draftReady} aria-label="Write a local message" placeholder={draftReady ? 'Write a message to this room...' : 'Loading saved drafts...'} rows="2" oninput={(event) => changeComposerDraft(event.currentTarget.value)} onblur={() => { if (draftReady && roomId) void draftPersistence.flush(roomId); }} onkeydown={(event) => {if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {event.preventDefault(); void sendMessage();}}}></textarea>
+              <textarea bind:value={draft} disabled={busy || replyBusy || !isNative || !draftReady} aria-label="Write a local message" placeholder={draftReady ? 'Write a message to this room...' : 'Loading saved drafts...'} rows="2" oninput={(event) => changeComposerDraft(event.currentTarget.value)} oncompositionstart={() => { composerCompositionActive = true; }} oncompositionend={(event) => { composerCompositionActive = false; composerLastCompositionEnd = event.timeStamp; changeComposerDraft(event.currentTarget.value); }} onblur={() => { if (draftReady && roomId) void draftPersistence.flush(roomId); }} onkeydown={handleComposerKeydown}></textarea>
               <div class="compose-bottom"><span class="save-local-label"><ShieldCheck size={14}/> Save in this room</span><button class="send-button" type="submit" disabled={!draft.trim() || busy || replyBusy || !isNative || !draftReady} title="Save message locally" aria-label="Save message locally">{#if busy}<Square size={16}/>{:else}<ArrowRight size={19}/>{/if}</button></div>
             </form>
             {#if draftLoadError}
