@@ -419,7 +419,28 @@ try {
         ([System.Windows.Automation.TogglePattern]$patternObject).Toggle()
         return
       }
-      throw "Native button '$($element.Current.Name)' has neither InvokePattern nor TogglePattern."
+      # WebView2 may expose aria-expanded buttons through ExpandCollapsePattern
+      # rather than InvokePattern. This is an accessibility action on the
+      # private-desktop element, not synthetic input to the physical keyboard.
+      if ($element.TryGetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern, [ref]$patternObject)) {
+        $expandable = [System.Windows.Automation.ExpandCollapsePattern]$patternObject
+        if ($expandable.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Collapsed) {
+          $expandable.Expand()
+        } elseif ($expandable.Current.ExpandCollapseState -eq [System.Windows.Automation.ExpandCollapseState]::Expanded) {
+          $expandable.Collapse()
+        } else {
+          throw "Native expandable button '$($element.Current.Name)' has no actionable expanded/collapsed state."
+        }
+        return
+      }
+      # LegacyIAccessible is Chromium's fallback for some otherwise-semantic
+      # HTML buttons. A follow-up DB assertion must prove the requested action.
+      if ($element.TryGetCurrentPattern([System.Windows.Automation.LegacyIAccessiblePattern]::Pattern, [ref]$patternObject)) {
+        ([System.Windows.Automation.LegacyIAccessiblePattern]$patternObject).DoDefaultAction()
+        return
+      }
+      $available = @($element.GetSupportedPatterns() | ForEach-Object { $_.ProgrammaticName }) -join ', '
+      throw "Native button '$($element.Current.Name)' has no actionable UIA pattern; available: $available."
     }
     function Set-UxInput([System.Windows.Automation.AutomationElement]$element, [string]$text) {
       $patternObject = $null
@@ -531,8 +552,12 @@ console.log('PERSISTED_EMPTY_TEAM_AND_AUDIT_PASS');
       Invoke-UxControl (Find-ExactUxControl 'Add agent' 'ControlType.Button')
       Set-UxInput (Find-ExactUxControl 'DISPLAY NAME' 'ControlType.Edit') 'Temporary unused worker'
       Invoke-UxControl (Find-ExactUxControl 'Add teammate' 'ControlType.Button')
-      [void](Find-ExactUxControl 'Temporary unused worker')
-      Invoke-UxControl (Find-ExactUxControl 'Remove unused worker Temporary unused worker from workspace' 'ControlType.Button')
+      # The newly persisted worker's text is nested inside an aria-labelled
+      # roster button; Chromium does not necessarily expose a separate UIA
+      # text node matching the bare display name. The actionable control is
+      # the stronger assertion that the new worker is visible in the roster.
+      $unusedWorkerRemove = Find-ExactUxControl 'Remove unused worker Temporary unused worker from workspace' 'ControlType.Button'
+      Invoke-UxControl $unusedWorkerRemove
       [void](Find-ExactUxControl 'Confirm removing Temporary unused worker from the workspace')
       Invoke-UxControl (Find-ExactUxControl 'Confirm remove unused' 'ControlType.Button')
       $readWorkers = @'
