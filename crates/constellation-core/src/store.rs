@@ -5,10 +5,10 @@ use std::{
 };
 
 use rusqlite::{
-    params, Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior,
+    Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
 };
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::{Value, json};
 
 use crate::{
     Agent, AgentId, CoreError, CredentialSource, Event, EventKind, Message, MessageId,
@@ -583,6 +583,64 @@ impl StudioStore {
         )?;
         tx.commit()?;
         Ok(agent)
+    }
+
+    /// Remove a never-used worker from the local roster without destroying
+    /// historical attribution. A saved room team, message or task referencing
+    /// the worker prevents removal. The native caller must independently
+    /// exclude saved workflows and active operations before entering here.
+    ///
+    /// The full expected agent is a compare-and-swap token: another window's
+    /// provider assignment or roster update cannot silently be discarded.
+    pub fn remove_unused_agent(&self, expected: Agent, operation_id: OperationId) -> Result<()> {
+        let fingerprint = json!({"op":"remove_unused_agent","expected":expected});
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if previous_result::<Agent>(&tx, operation_id, &fingerprint)?.is_some() {
+            return Ok(());
+        }
+        let current: Agent = read_one(&tx, "agents", &expected.id.to_string())?
+            .ok_or(CoreError::NotFound("agent"))?;
+        if current != expected {
+            return Err(CoreError::OperationConflict);
+        }
+        if read_table::<Room>(&tx, "rooms")?.iter().any(|room| {
+            room.member_ids
+                .as_ref()
+                .is_some_and(|ids| ids.contains(&expected.id))
+        }) {
+            return Err(CoreError::InvalidInput(
+                "remove this worker from all saved room teams first".into(),
+            ));
+        }
+        if read_table::<Message>(&tx, "messages")?
+            .iter()
+            .any(|message| message.sender == MessageSender::Agent(expected.id))
+        {
+            return Err(CoreError::InvalidInput(
+                "this worker authored messages; retain its identity for provenance".into(),
+            ));
+        }
+        if read_table::<Task>(&tx, "tasks")?
+            .iter()
+            .any(|task| task.agent_id == expected.id)
+        {
+            return Err(CoreError::InvalidInput(
+                "this worker owns saved tasks; retain its identity for provenance".into(),
+            ));
+        }
+        tx.execute("DELETE FROM agents WHERE id=?1", [expected.id.to_string()])?;
+        record_event(
+            &tx,
+            operation_id,
+            &fingerprint,
+            EventKind::AgentRemoved {
+                agent_id: expected.id,
+            },
+            &expected,
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Changes the preferred provider for one agent. There is no implicit
@@ -1273,6 +1331,84 @@ mod historical_schema_startup_tests {
     use super::*;
 
     #[test]
+    fn worker_removal_is_confirmed_idempotent_and_preserves_immutable_audit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workers.sqlite3");
+        let store = StudioStore::open(&path).unwrap();
+        let agent = store.add_agent("Researcher", "Unused worker").unwrap();
+        let operation = OperationId::new();
+        let mut stale = agent.clone();
+        stale.name = "wrong name".into();
+        assert!(matches!(
+            store.remove_unused_agent(stale, OperationId::new()),
+            Err(CoreError::OperationConflict)
+        ));
+        assert_eq!(store.snapshot().unwrap().agents.len(), 1);
+        store.remove_unused_agent(agent.clone(), operation).unwrap();
+        store.remove_unused_agent(agent.clone(), operation).unwrap();
+        assert!(store.snapshot().unwrap().agents.is_empty());
+        assert!(matches!(
+            store.remove_unused_agent(agent.clone(), OperationId::new()),
+            Err(CoreError::NotFound("agent"))
+        ));
+        drop(store);
+        let reopened = StudioStore::open(&path).unwrap();
+        assert!(reopened.snapshot().unwrap().agents.is_empty());
+        let events = reopened.events().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.kind, EventKind::AgentRemoved { agent_id } if agent_id == agent.id
+        )));
+    }
+
+    #[test]
+    fn worker_removal_rejects_saved_membership_history_and_task_owner() {
+        // Each restriction is checked in its own profile. A failed deletion
+        // must leave the agent and associated evidence unchanged.
+        for case in ["room", "message", "task"] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = StudioStore::open(dir.path().join("worker-safety.sqlite3")).unwrap();
+            let room = store.create_room("Research workspace").unwrap();
+            let agent = store.add_agent("Reviewer", "Worker with history").unwrap();
+            match case {
+                "room" => {
+                    store
+                        .set_room_members(room.id, vec![agent.id], None, OperationId::new())
+                        .unwrap();
+                }
+                "message" => {
+                    store
+                        .append_message(room.id, MessageSender::Agent(agent.id), "Saved response")
+                        .unwrap();
+                }
+                "task" => {
+                    store.create_task(room.id, agent.id, "Saved task").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    store.remove_unused_agent(agent.clone(), OperationId::new()),
+                    Err(CoreError::InvalidInput(_))
+                ),
+                "unexpected removal for {case}"
+            );
+            assert_eq!(store.snapshot().unwrap().agents, vec![agent.clone()]);
+            // Membership is a routing preference, so removing someone from
+            // the room safely permits roster deletion if no other history
+            // refers to that worker.
+            if case == "room" {
+                store
+                    .set_room_members(room.id, vec![], Some(vec![agent.id]), OperationId::new())
+                    .unwrap();
+                store
+                    .remove_unused_agent(agent, OperationId::new())
+                    .unwrap();
+                assert!(store.snapshot().unwrap().agents.is_empty());
+            }
+        }
+    }
+
+    #[test]
     fn shipped_unversioned_profile_migrates_without_rewriting_schema_or_data() {
         for budget in [false, true] {
             for evidence in [false, true] {
@@ -1402,9 +1538,11 @@ mod historical_schema_startup_tests {
             store.save_room_draft(RoomId::new(), "oops".into(), 0),
             Err(CoreError::NotFound("room"))
         ));
-        assert!(store
-            .save_room_draft(room.id, "x".repeat(131_073), 0)
-            .is_err());
+        assert!(
+            store
+                .save_room_draft(room.id, "x".repeat(131_073), 0)
+                .is_err()
+        );
         store.save_room_draft(room.id, "safe".into(), 0).unwrap();
         drop(store);
         let conn = Connection::open(&path).unwrap();

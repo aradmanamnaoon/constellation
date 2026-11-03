@@ -495,10 +495,10 @@ db.close();
         throw 'Room team control does not expose keyboard-accessible ExpandCollapsePattern.'
       }
       ([System.Windows.Automation.ExpandCollapsePattern]$expansion).Expand()
-      $member = Find-ExactUxControl 'Private UX analyst' 'ControlType.CheckBox'
+      $member = Find-ExactUxControl 'Deselect worker Private UX analyst for this room' 'ControlType.Button'
       $toggle = $null
       if (-not $member.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern, [ref]$toggle)) {
-        throw 'Room member selection did not expose an accessible toggle.'
+        throw 'Worker selection did not expose a proper aria-pressed toggle button.'
       }
       ([System.Windows.Automation.TogglePattern]$toggle).Toggle()
       Invoke-UxControl (Find-ExactUxControl 'Save room team' 'ControlType.Button')
@@ -520,7 +520,37 @@ console.log('PERSISTED_EMPTY_TEAM_AND_AUDIT_PASS');
       if ($LASTEXITCODE -ne 0 -or [string]$verification -cne 'PERSISTED_EMPTY_TEAM_AND_AUDIT_PASS') {
         throw 'Persisted room membership/audit did not match the user-initiated UI selection.'
       }
-      $result.room_team_result = 'passed: native expandable team, accessible checkbox, explicit save and audited SQLite persisted empty membership'
+      # Test the other removal affordance separately. The referenced worker
+      # owns the saved task above; the native action must reject deletion and
+      # retain its identity. There is no model/provider request.
+      Invoke-UxControl (Find-ExactUxControl 'Remove unused worker Private UX analyst from workspace' 'ControlType.Button')
+      [void](Find-ExactUxControl 'Confirm removing Private UX analyst from the workspace')
+      Invoke-UxControl (Find-ExactUxControl 'Confirm remove unused' 'ControlType.Button')
+      [void](Find-ExactUxControl 'Worker removal denied. Remove the worker from saved rooms first; workers with messages, tasks or workflow history must be retained. A changed worker cannot be deleted from a stale window.')
+      # Now create and remove a genuinely unused worker through real buttons.
+      Invoke-UxControl (Find-ExactUxControl 'Add agent' 'ControlType.Button')
+      Set-UxInput (Find-ExactUxControl 'DISPLAY NAME' 'ControlType.Edit') 'Temporary unused worker'
+      Invoke-UxControl (Find-ExactUxControl 'Add teammate' 'ControlType.Button')
+      [void](Find-ExactUxControl 'Temporary unused worker')
+      Invoke-UxControl (Find-ExactUxControl 'Remove unused worker Temporary unused worker from workspace' 'ControlType.Button')
+      [void](Find-ExactUxControl 'Confirm removing Temporary unused worker from the workspace')
+      Invoke-UxControl (Find-ExactUxControl 'Confirm remove unused' 'ControlType.Button')
+      $readWorkers = @'
+const { DatabaseSync } = require('node:sqlite');
+const db = new DatabaseSync(process.argv[2], { readOnly: true });
+const agents = db.prepare('SELECT data FROM agents').all().map(({data}) => JSON.parse(data));
+const removedEvents = db.prepare('SELECT kind FROM events').all().filter(({kind}) => JSON.parse(kind).type === 'agent_removed');
+const tasks = db.prepare('SELECT data FROM tasks').all().map(({data}) => JSON.parse(data));
+db.close();
+if (agents.length !== 1 || agents[0].name !== 'Private UX analyst') process.exit(4);
+if (removedEvents.length !== 1 || tasks.length !== 1 || tasks[0].agent_id !== agents[0].id) process.exit(5);
+console.log('NATIVE_WORKER_REMOVAL_REFERENCES_PROTECTED_AND_UNUSED_REMOVED_PASS');
+'@
+      $verified = $readWorkers | node - $sqlitePath
+      if ($LASTEXITCODE -ne 0 -or [string]$verified -cne 'NATIVE_WORKER_REMOVAL_REFERENCES_PROTECTED_AND_UNUSED_REMOVED_PASS') {
+        throw 'Native worker removal did not preserve the referenced worker and remove only unused worker with audited event.'
+      }
+      $result.room_team_result = 'passed: native toggle buttons, explicit saved empty team, referenced worker removal denied, unused worker removed with SQLite audit'
     }
   }
   if ($TestProviderDirectory) {

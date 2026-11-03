@@ -143,6 +143,9 @@ pub enum EventKind {
     AgentAdded {
         agent_id: AgentId,
     },
+    AgentRemoved {
+        agent_id: AgentId,
+    },
     AgentProviderChanged {
         agent_id: AgentId,
         provider_id: Option<ProviderId>,

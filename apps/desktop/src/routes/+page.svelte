@@ -23,7 +23,7 @@
 
   type Screen = 'home' | 'rooms' | 'tasks' | 'evidence' | 'library' | 'settings';
   type Room = { id: string; name: string; description: string; member_ids: string[]; members_configured?: boolean };
-  type Agent = { id: string; name: string; role: string; provider_id?: string | null };
+  type Agent = { id: string; name: string; role: string; provider_id?: string | null; created_at_ms: number };
   type ChatMessage = { id: string; room_id: string; sender_kind: 'user' | 'agent' | 'system'; sender_name: string; body: string; created_at: number | string; simulated?: boolean };
   type ProviderKind = 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'google_gemini' | 'ollama_native' | 'custom_compatible';
   type Provider = { id: string; name: string; endpoint: string; model: string; connected: boolean; kind?: ProviderKind; remembered_key?: boolean };
@@ -140,6 +140,7 @@
   let pendingSendsByRoom = $state<Record<string, PendingSend>>({});
   let selectedProviderId = $state('');
   let selectedAgentsByRoom = $state<Record<string, string[]>>({});
+  let removeWorkerCandidate = $state('');
   let replyBusy = $state(false);
   let replyCancelBusy = $state(false);
   let streamingRoomId = $state('');
@@ -651,6 +652,54 @@
     selectedAgentsByRoom = { ...selectedAgentsByRoom, [roomId]: ids };
   }
 
+  async function removeWorkerFromRoom(worker: Agent) {
+    if (!isNative || working || busy || replyBusy || workflowBusy || !room || !selectedAgentIds.includes(worker.id)) return;
+    // Removing one worker from a room is reversible and never changes the
+    // workspace roster or historical attribution.
+    if (unsavedRoomTeam) {
+      toggleAgent(worker.id, false);
+      notice = `${worker.name} unchecked. Save room team to persist the change; your other edits are still unsaved.`;
+      return;
+    }
+    const currentRoomId = room.id;
+    const nextIds = (room.members_configured ? room.member_ids : selectedAgentIds).filter((id) => id !== worker.id);
+    working = true; error = '';
+    try {
+      await invoke('studio_set_room_members', {
+        roomId: currentRoomId,
+        memberIds: nextIds,
+        expectedMemberIds: room.members_configured ? room.member_ids : null,
+      });
+      const remaining = { ...selectedAgentsByRoom };
+      delete remaining[currentRoomId];
+      selectedAgentsByRoom = remaining;
+      await refresh();
+      notice = `${worker.name} removed from this room. Other rooms and saved history are unchanged.`;
+    } catch {
+      error = 'Could not remove worker from room. Another window may have edited this team. Reload and try again; history is unchanged.';
+    } finally { working = false; }
+  }
+
+  async function removeUnusedWorker(worker: Agent) {
+    if (!isNative || !Number.isSafeInteger(worker.created_at_ms) || working || busy || replyBusy || workflowBusy || removeWorkerCandidate !== worker.id) return;
+    working = true; error = '';
+    try {
+      await invoke('studio_remove_unused_agent', {
+        agentId: worker.id,
+        expectedName: worker.name,
+        expectedRole: worker.role,
+        expectedProviderId: worker.provider_id ?? null,
+        expectedCreatedAtMs: worker.created_at_ms,
+      });
+      removeWorkerCandidate = '';
+      await refresh();
+      notice = `${worker.name} removed from the local worker roster. No model request was made.`;
+    } catch {
+      removeWorkerCandidate = '';
+      error = 'Worker removal denied. Remove the worker from saved rooms first; workers with messages, tasks or workflow history must be retained. A changed worker cannot be deleted from a stale window.';
+    } finally { working = false; }
+  }
+
   async function saveRoomTeam() {
     if (!isNative || working || replyBusy || busy || !room || !unsavedRoomTeam || selectedAgentIds.length > 8) return;
     const targetRoomId = room.id;
@@ -911,6 +960,15 @@
       notice = 'Message text copied. Nothing was sent to an AI provider.';
     } catch (cause) {
       error = `Could not copy message text: ${String(cause)}`;
+    }
+  }
+
+  async function copyProviderField(value: string, description: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      notice = `${description} copied to clipboard. No connection was opened and no API key was copied.`;
+    } catch {
+      error = `Could not copy ${description.toLowerCase()}. Review your clipboard permissions.`;
     }
   }
 
@@ -2444,21 +2502,30 @@
     {#if screen === 'rooms'}
       <div class="sidebar-section-title"><span>CONVERSATIONS</span><button aria-label="Create room" title="Create room" onclick={() => (dialog = 'new-room')}><Plus size={17}/></button></div>
       {#if snapshot.rooms.length > 0}
-        <label class="room-search"><Search size={15} aria-hidden="true"/><input type="search" aria-label="Filter rooms" placeholder="Find a conversation…" autocomplete="off" bind:value={roomSearch}/><kbd>Ctrl K</kbd></label>
+        <div class="room-search"><Search size={15} aria-hidden="true"/><input type="search" aria-label="Filter rooms" placeholder="Find a conversation…" autocomplete="off" bind:value={roomSearch}/>{#if roomSearch}<button type="button" class="room-search-clear" aria-label="Clear room search" onclick={() => (roomSearch = '')}><X size={14}/></button>{/if}</div>
       {/if}
       <div class="room-list">
         {#each filteredRooms as r (r.id)}
           <button class:selected={roomId === r.id} aria-current={roomId === r.id ? 'true' : undefined} class="room-link" onclick={() => selectRoom(r.id)}><span class="room-symbol">#</span><span>{r.name}</span></button>
         {:else}
-          <div class="sidebar-empty">{snapshot.rooms.length ? 'No rooms match. Clear the search to see all conversations.' : 'Rooms you create appear here.'}</div>
+          <div class="sidebar-empty">{snapshot.rooms.length ? 'No rooms match this search.' : 'Rooms you create appear here.'}<button type="button" class="sidebar-empty-action" onclick={() => snapshot.rooms.length ? (roomSearch = '') : (dialog = 'new-room')}>{snapshot.rooms.length ? 'Clear room search' : 'Create a room'} <ArrowRight size={13}/></button></div>
         {/each}
       </div>
       <div class="sidebar-section-title agent-title"><span>{room ? 'ROOM TEAM' : 'YOUR TEAM'}</span><button title="Add an agent" aria-label="Add agent" onclick={() => (dialog = 'new-agent')}><Plus size={17}/></button></div>
       <div class="agent-list">
         {#each snapshot.agents as agent (agent.id)}
-          <button type="button" class="agent-item" class:in-room={!!room && selectedAgentIds.includes(agent.id)} aria-label={room ? `Edit room membership for ${agent.name}` : `Select a room to work with ${agent.name}`} onclick={() => void openRoomTeamEditor()}><div class="agent-avatar" aria-hidden="true">✳</div><span>{agent.name}<small>{agent.role}</small></span><span class="agent-dot" title={room && selectedAgentIds.includes(agent.id) ? 'Selected for this room' : 'Available for this room'}></span></button>
+          <div class="agent-row">
+            <button type="button" class="agent-item" class:in-room={!!room && selectedAgentIds.includes(agent.id)} aria-label={room ? `Edit room membership for ${agent.name}` : `Select a room to work with ${agent.name}`} onclick={() => void openRoomTeamEditor()}><div class="agent-avatar" aria-hidden="true">✳</div><span>{agent.name}<small>{agent.role}</small></span><span class="agent-dot" title={room && selectedAgentIds.includes(agent.id) ? 'Selected for this room' : 'Available for this room'}></span></button>
+            <button type="button" class="agent-remove-action" aria-label={`Remove unused worker ${agent.name} from workspace`} title="Remove unused worker" aria-expanded={removeWorkerCandidate === agent.id} disabled={!isNative || working || busy || replyBusy || workflowBusy} onclick={() => (removeWorkerCandidate = removeWorkerCandidate === agent.id ? '' : agent.id)}><X size={15}/></button>
+          </div>
+          {#if removeWorkerCandidate === agent.id}
+            <div class="agent-remove-confirm" role="group" aria-label={`Confirm removing ${agent.name} from the workspace`}>
+              <p>Remove <strong>{agent.name}</strong> from this device? Only unused workers can be removed. Saved room membership, messages, tasks or workflows will block removal to preserve history.</p>
+              <div><button type="button" class="soft-button small" onclick={() => (removeWorkerCandidate = '')}>Keep worker</button><button type="button" class="soft-button small" disabled={!isNative || working || busy || replyBusy || workflowBusy} onclick={() => void removeUnusedWorker(agent)}>Confirm remove unused</button></div>
+            </div>
+          {/if}
         {:else}
-          <div class="sidebar-empty">Build your team from the role library.</div>
+          <div class="sidebar-empty">No workers yet.<button type="button" class="sidebar-empty-action" onclick={() => (dialog = 'new-agent')}>Add worker <Plus size={13}/></button></div>
         {/each}
       </div>
       {#if room && snapshot.agents.length > 0}
@@ -2563,13 +2630,20 @@
                 <details class="reply-agent-picker"><summary>Agents · {selectedAgentIds.length} selected <span>{unsavedRoomTeam ? 'Unsaved team' : 'Change room team'}</span></summary>
                   <fieldset class="reply-agents" disabled={!isNative || busy || replyBusy}>
                     <legend>Choose one or more agents</legend>
-                    <div class="agent-options">{#each snapshot.agents as agent (agent.id)}<label class:chosen={selectedAgentIds.includes(agent.id)}><input type="checkbox" checked={selectedAgentIds.includes(agent.id)} onchange={(event) => toggleAgent(agent.id, event.currentTarget.checked)}/><span>{agent.name}</span></label>{/each}</div>
+                    <div class="agent-options">{#each snapshot.agents as agent (agent.id)}<button type="button" class:chosen={selectedAgentIds.includes(agent.id)} aria-pressed={selectedAgentIds.includes(agent.id)} aria-label={`${selectedAgentIds.includes(agent.id) ? 'Deselect' : 'Select'} worker ${agent.name} for this room`} onclick={() => toggleAgent(agent.id, !selectedAgentIds.includes(agent.id))}><span aria-hidden="true">{selectedAgentIds.includes(agent.id) ? '✓' : '+'}</span> {agent.name}</button>{/each}</div>
                   </fieldset>
                   <div class="room-team-controls">
                     <span role="status">{unsavedRoomTeam ? 'Changes apply to this room now but are not yet saved for the next launch.' : room?.members_configured ? 'This room team is saved on this device.' : 'This older room has no saved team yet; the first agent is suggested.'}</span>
                     {#if unsavedRoomTeam}
                       <button type="button" class="soft-button small" disabled={!isNative || working || busy || replyBusy || selectedAgentIds.length > 8} onclick={() => void saveRoomTeam()}>Save room team</button>
                       <button type="button" class="text-button" disabled={working} onclick={() => { const next = { ...selectedAgentsByRoom }; delete next[roomId]; selectedAgentsByRoom = next; }}>Discard changes</button>
+                    {/if}
+                    {#if selectedAgentIds.length > 0}
+                      <div class="room-team-remove-actions" aria-label="Remove workers from this room">
+                        {#each snapshot.agents.filter((agent) => selectedAgentIds.includes(agent.id)) as agent (agent.id)}
+                          <button type="button" class="soft-button small" disabled={!isNative || working || busy || replyBusy || workflowBusy} onclick={() => void removeWorkerFromRoom(agent)} aria-label={`Remove ${agent.name} from this room`}>Remove {agent.name} from room <X size={12}/></button>
+                        {/each}
+                      </div>
                     {/if}
                   </div>
                 </details>
@@ -3170,7 +3244,7 @@
             {@const result = probeResults[provider.id]}
             <div class="provider-row">
               <div class="provider-symbol"><Cpu size={18}/></div>
-              <div><strong>{provider.name}</strong><span>{providerKindLabel(provider.kind)} · {provider.model}</span><span class="provider-endpoint" title={provider.endpoint}>{provider.endpoint}</span><span>{provider.remembered_key ? 'API key reference saved in OS credential manager' : 'No persistent API key in this profile'}</span><span class="provider-verification">{result?.status === 'compatible_text' ? 'Text test passed in this session only' : result ? 'Text test needs attention' : 'Not tested in this session'}</span></div>
+              <div><strong>{provider.name}</strong><span>{providerKindLabel(provider.kind)} · {provider.model}</span><div class="provider-copy-row"><code class="provider-endpoint" title={provider.endpoint}>{provider.endpoint}</code><button type="button" class="soft-button small" aria-label={`Copy URL for ${provider.name}`} onclick={() => void copyProviderField(provider.endpoint, 'Provider URL')}>Copy URL</button><button type="button" class="soft-button small" aria-label={`Copy model ID for ${provider.name}`} onclick={() => void copyProviderField(provider.model, 'Model ID')}>Copy model ID</button></div><span>{provider.remembered_key ? 'API key reference saved in OS credential manager' : 'No persistent API key in this profile'}</span><span class="provider-verification">{result?.status === 'compatible_text' ? 'Text test passed in this session only' : result ? 'Text test needs attention' : 'Not tested in this session'}</span></div>
               <div class="provider-actions">
                 <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} aria-label={'Revise configuration for ' + provider.name} onclick={() => openProviderRevision(provider)}>Revise</button>
                 <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} onclick={() => void testProvider(provider.id)}>{probeBusyId === provider.id ? 'Testing…' : 'Test text chat'}</button>

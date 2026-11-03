@@ -738,7 +738,7 @@ fn snapshot_to_view(snapshot: &StudioSnapshot) -> Value {
         .map(|agent| {
             json!({
                 "id":agent.id, "name":agent.name, "role":agent.role,
-                "provider_id":agent.provider_id
+                "provider_id":agent.provider_id, "created_at_ms":agent.created_at_ms
             })
         })
         .collect::<Vec<_>>();
@@ -2123,6 +2123,52 @@ fn studio_add_agent(
     }
     .map_err(err)?;
     Ok(json!({"id":agent.id,"name":agent.name,"role":agent.role,"provider_id":agent.provider_id}))
+}
+
+/// Only never-used workers may leave the roster. The immutable core event
+/// retains the removed identity; referenced tasks/messages/teams are refused.
+#[tauri::command]
+fn studio_remove_unused_agent(
+    state: State<'_, StudioState>,
+    agent_id: String,
+    expected_name: String,
+    expected_role: String,
+    expected_provider_id: Option<String>,
+    expected_created_at_ms: i64,
+) -> Result<(), String> {
+    let expected = Agent {
+        id: agent_id.parse().map_err(|_| "Invalid worker ID")?,
+        name: expected_name,
+        role: expected_role,
+        provider_id: expected_provider_id
+            .map(|id| id.parse().map_err(|_| "Invalid worker provider ID"))
+            .transpose()?,
+        created_at_ms: expected_created_at_ms,
+    };
+    let _task_gate = state
+        .task_tool_boundary
+        .lock()
+        .map_err(|_| "Task authorization lock unavailable")?;
+    if !state
+        .generating_rooms
+        .lock()
+        .map_err(|_| "Active reply status unavailable")?
+        .is_empty()
+    {
+        return Err("Wait for active replies to finish before removing a worker".into());
+    }
+    if !state
+        .workflows
+        .list(1, 0)
+        .map_err(|_| "Workflow history check failed; worker removal denied")?
+        .is_empty()
+    {
+        return Err("Saved workflows exist; worker removal denied to retain attribution".into());
+    }
+    state
+        .store
+        .remove_unused_agent(expected, OperationId::new())
+        .map_err(err)
 }
 
 /// A saved preference, not a tool grant and never an automatic network send.
@@ -4601,6 +4647,7 @@ pub fn run() {
             studio_create_room,
             studio_set_room_members,
             studio_add_agent,
+            studio_remove_unused_agent,
             studio_set_agent_provider,
             studio_send_message,
             studio_send_saved_draft,
