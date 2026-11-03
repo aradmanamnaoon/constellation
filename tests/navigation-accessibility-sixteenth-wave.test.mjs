@@ -4,6 +4,7 @@ import { test } from 'node:test';
 
 const page = readFileSync(new URL('../apps/desktop/src/routes/+page.svelte', import.meta.url), 'utf8');
 const styles = readFileSync(new URL('../apps/desktop/src/routes/studio.css', import.meta.url), 'utf8');
+const navigation = readFileSync(new URL('../apps/desktop/src/lib/workspace-navigation.ts', import.meta.url), 'utf8');
 
 test('keyboard-first users can bypass persistent chrome to a focusable main landmark', () => {
   assert.match(page, /<a class="skip-workspace-link" href="#workspace-main">Skip to workspace content<\/a>/);
@@ -21,7 +22,8 @@ test('rail sections and current room expose selection semantics independent of c
 });
 
 test('command palette includes the Evidence destination and task copy states existing controls accurately', () => {
-  assert.match(page, /\{label:'Evidence',target:'evidence'\}/);
+  assert.match(page, /<WorkspaceCommandPalette rooms=\{snapshot\.rooms\}/);
+  assert.match(navigation, /label: 'Evidence'.*section: 'evidence'/);
   assert.match(page, /Text-only model execution is available with an explicitly selected provider/);
   assert.match(page, /local file actions still require separate native approval/);
   assert.doesNotMatch(page, /Execution and tool permissions will be available in a future build/);

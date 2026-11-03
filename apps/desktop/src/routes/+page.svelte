@@ -9,11 +9,21 @@
     Cpu, BookOpen, FileSearch, Maximize2, Minimize2,
   } from '@lucide/svelte';
   import roleCatalog from '../../../../catalog/roles.json';
+  import WorkspaceCommandPalette from '../lib/WorkspaceCommandPalette.svelte';
+  import { filterWorkspaceRooms, type WorkspaceAction } from '../lib/workspace-navigation';
+  import { filterRoleLibrary, roleCategories } from '../lib/role-library';
+  import { splitChatBlocks } from '../lib/chat-format';
+  import { filterProviderDirectory, type ProviderStatusFilter } from '../lib/provider-directory';
+  import { prepareProviderRevision } from '../lib/provider-revision';
+  import { paginateLocal } from '../lib/local-pagination';
+  import { DraftPersistence, type DraftState, type StoredDraft } from '../lib/draft-persistence';
+  import { SerialAsyncQueue } from '../lib/serial-async-queue';
+  import { composerEnterAction } from '../lib/composer-keyboard';
   import './studio.css';
 
   type Screen = 'home' | 'rooms' | 'tasks' | 'evidence' | 'library' | 'settings';
-  type Room = { id: string; name: string; description: string; member_ids: string[] };
-  type Agent = { id: string; name: string; role: string; provider_id?: string | null };
+  type Room = { id: string; name: string; description: string; member_ids: string[]; members_configured?: boolean };
+  type Agent = { id: string; name: string; role: string; provider_id?: string | null; created_at_ms: number };
   type ChatMessage = { id: string; room_id: string; sender_kind: 'user' | 'agent' | 'system'; sender_name: string; body: string; created_at: number | string; simulated?: boolean };
   type ProviderKind = 'openai_chat' | 'openai_responses' | 'anthropic_messages' | 'google_gemini' | 'ollama_native' | 'custom_compatible';
   type Provider = { id: string; name: string; endpoint: string; model: string; connected: boolean; kind?: ProviderKind; remembered_key?: boolean };
@@ -33,7 +43,7 @@
   type WorkflowStepDefinition = { id: string; role: string; agent_id: string; provider_id: string; instruction: string; depends_on: string[]; max_attempts: number };
   type WorkflowDefinition = { schema_version: number; workflow_id: string; steps: WorkflowStepDefinition[] };
   type SavedWorkflow = { definition: WorkflowDefinition; states: Record<string, { status: string; attempts: number; result_text?: string | null }>; ready_step_ids: string[]; revision: number; cancelled: boolean };
-  type WorkflowListResponse = { items: SavedWorkflow[]; max_items: number; has_more: boolean };
+  type WorkflowListResponse = { items: SavedWorkflow[]; max_items: number; offset: number; query: string; has_more: boolean };
   type WorkflowCreateResponse = { workflow_id: string; revision: number; ready_step_ids: string[]; stored: boolean; executed: boolean; tools_executed: boolean };
   type WorkflowCancelResponse = { workflow_id: string; revision: number; cancelled: boolean };
   type WorkflowStepResponse = { workflow_id: string; step_id: string; revision: number; status: string; result_text: string; ready_step_ids: string[]; provider_requests_sent: boolean; tools_executed: boolean };
@@ -109,10 +119,28 @@
   let snapshot = $state<Snapshot>({ rooms: [], agents: [], messages: [], providers: [], tasks: [] });
   let roomId = $state('');
   let draft = $state('');
+  // Keep composition state outside persistence: composing text is still sent
+  // to the normal native-backed draft autosave path through `oninput`.
+  let composerCompositionActive = false;
+  let composerLastCompositionEnd: number | null = null;
   let draftsByRoom = $state<Record<string, string>>({});
+  let draftReady = $state(false);
+  let draftLoadError = $state('');
+  let draftStates = $state<Record<string, DraftState>>({});
+  let draftErrors = $state<Record<string, string>>({});
+  const draftPersistence = new DraftPersistence(
+    (id, content, expectedRevision) => invoke<StoredDraft>('studio_save_room_draft', {
+      roomId: id, content, expectedRevision,
+    }),
+    (id, status, saveError) => {
+      draftStates = { ...draftStates, [id]: status };
+      draftErrors = { ...draftErrors, [id]: saveError ?? '' };
+    },
+  );
   let pendingSendsByRoom = $state<Record<string, PendingSend>>({});
   let selectedProviderId = $state('');
   let selectedAgentsByRoom = $state<Record<string, string[]>>({});
+  let removeWorkerCandidate = $state('');
   let replyBusy = $state(false);
   let replyCancelBusy = $state(false);
   let streamingRoomId = $state('');
@@ -120,23 +148,43 @@
   let replyFeedbackByRoom = $state<Record<string, ReplyFeedback>>({});
   let streamAnswers = $state(false);
   let themeMode = $state<'system' | 'light' | 'dark'>('system');
+  const supportedZoomLevels = [100, 125, 150, 175, 200] as const;
+  let uiZoomPercent = $state(100);
+  let uiZoomBusy = $state(false);
+  let uiZoomError = $state('');
   let streamPreviewByRoom = $state<Record<string, Record<string, string>>>({});
   let newRoom = $state('');
   let newAgent = $state('');
   let selectedRole = $state(starterRoles[0]?.name ?? '');
   let search = $state('');
+  let roleCategory = $state('All');
+  let rolePageSize = $state(24);
+  let roomSearch = $state('');
   let providerName = $state('Custom provider');
   let providerKind = $state<ProviderKind>('custom_compatible');
   let providerEndpoint = $state('http://127.0.0.1:11434/v1');
   let providerModel = $state('');
   let providerKey = $state('');
   let providerRememberKey = $state(false);
+  let providerRevisionSourceId = $state('');
+  let providerRevisionSavedKey = $state(false);
+  let providerRemovalCandidate = $state('');
+  let providerForgetCandidate = $state('');
+  let providerForgetConfirmation = $state('');
   let probeBusyId = $state('');
   let probeResults = $state<Record<string, ProviderProbe | { status: 'request_error'; message: string }>>({});
+  let providerSearch = $state('');
+  let providerStatusFilter = $state<ProviderStatusFilter>('all');
   let taskRoomId = $state('');
   let taskFilterRoomId = $state('');
+  let taskSearch = $state('');
+  let taskStatusFilter = $state<'all' | 'open' | 'done' | 'attention'>('all');
+  const taskPageSize = 40;
+  let taskPage = $state(0);
+  let taskProviders = $state<Record<string, string>>({});
   let taskAgentId = $state('');
   let taskInstructions = $state('');
+  let taskSetupReturn = $state<'new-room' | 'new-agent' | null>(null);
   let tasksView = $state<'tasks' | 'workflows'>('tasks');
   let runningTaskId = $state('');
   let taskCancelConfirmation = $state('');
@@ -186,6 +234,8 @@
   let evidenceNotice = $state('');
   let evidenceLoadConfirmation = $state<{sourceId: string; sha256: string} | null>(null);
   let evidenceSavedResults = $state(false);
+  let evidenceSavedOffset = $state(0);
+  let evidenceSavedHasMore = $state(false);
   let evidenceDeleteConfirmation = $state<{sourceId: string; sha256: string} | null>(null);
   let evidenceImportRights = $state(false);
   let evidencePendingImport = $state<File | null>(null);
@@ -218,6 +268,10 @@
   let validatedWorkflowSignature = $state('');
   let workflowPreview = $state<WorkflowPreview | null>(null);
   let savedWorkflows = $state<SavedWorkflow[]>([]);
+  const workflowPageSize = 25;
+  let workflowOffset = $state(0);
+  let workflowSearchQuery = $state('');
+  let workflowAppliedSearch = $state('');
   let workflowHasMore = $state(false);
   let workflowLoading = $state(false);
   let workflowLoaded = $state(false);
@@ -239,13 +293,25 @@
   // Bound the number of mounted message nodes even in very large rooms.
   const messagePageSize = 100;
   let messagePage = $state(0);
+  let messageQuery = $state('');
+  let chatScrollElement = $state<HTMLDivElement | null>(null);
+  let chatNearBottom = $state(true);
+  let unreadMessageCount = $state(0);
+  // Snapshot loads and DOM scroll reconciliation must not overlap: an older
+  // native IPC response could otherwise replace a later room/task update.
+  const refreshQueue = new SerialAsyncQueue();
 
   const room = $derived(snapshot.rooms.find((r) => r.id === roomId));
   const messages = $derived(snapshot.messages.filter((m) => m.room_id === roomId));
-  const maxMessagePage = $derived(Math.max(0, Math.ceil(messages.length / messagePageSize) - 1));
-  const visibleMessageEnd = $derived(Math.max(0, messages.length - Math.min(messagePage, maxMessagePage) * messagePageSize));
-  const visibleMessages = $derived(messages.slice(Math.max(0, visibleMessageEnd - messagePageSize), visibleMessageEnd));
-  const selectedAgentIds = $derived((selectedAgentsByRoom[roomId] ?? snapshot.agents.slice(0, 1).map((agent) => agent.id)).filter((id) => snapshot.agents.some((agent) => agent.id === id)));
+  const matchingMessages = $derived(messages.filter((message) => {
+    const query = messageQuery.trim().toLocaleLowerCase();
+    return !query || `${message.sender_name} ${message.body}`.toLocaleLowerCase().includes(query);
+  }));
+  const maxMessagePage = $derived(Math.max(0, Math.ceil(matchingMessages.length / messagePageSize) - 1));
+  const visibleMessageEnd = $derived(Math.max(0, matchingMessages.length - Math.min(messagePage, maxMessagePage) * messagePageSize));
+  const visibleMessages = $derived(matchingMessages.slice(Math.max(0, visibleMessageEnd - messagePageSize), visibleMessageEnd));
+  const selectedAgentIds = $derived((selectedAgentsByRoom[roomId] ?? (room?.members_configured ? room.member_ids : snapshot.agents.slice(0, 1).map((agent) => agent.id))).filter((id) => snapshot.agents.some((agent) => agent.id === id)));
+  const unsavedRoomTeam = $derived(roomId !== '' && selectedAgentsByRoom[roomId] !== undefined);
   const selectedProvider = $derived(snapshot.providers.find((provider) => provider.id === selectedProviderId));
   const providerPreset = $derived(providerPresets[providerKind]);
   const documentBytes = $derived(utf8Bytes(evidenceText));
@@ -264,6 +330,23 @@
   // most recent user prompt; don't strand failed teammates behind this gate.
   const canAsk = $derived(isNative && !busy && !replyBusy && !!roomId && (!!selectedProvider || (usingAgentProviders && assignedProvidersReady)) && selectedAgentIds.length > 0 && messages.some((message) => message.sender_kind === 'user'));
   const roomTasks = $derived(snapshot.tasks.filter((task) => !taskFilterRoomId || task.room_id === taskFilterRoomId).slice().reverse());
+  const homeRooms = $derived(snapshot.rooms.slice(-5).reverse());
+  const homeOpenTasks = $derived(snapshot.tasks.filter((task) => ['pending', 'queued', 'running'].includes(task.state)).slice(-4).reverse());
+  const visibleRoomTasks = $derived(roomTasks.filter((task) => {
+    const term = taskSearch.trim().toLocaleLowerCase();
+    const agent = snapshot.agents.find((item) => item.id === task.agent_id);
+    const inSearch = !term || [task.instructions, agent?.name ?? '', agent?.role ?? '']
+      .some((item) => item.toLocaleLowerCase().includes(term));
+    const inStatus = taskStatusFilter === 'all'
+      || (taskStatusFilter === 'open' && ['pending', 'queued', 'running'].includes(task.state))
+      || (taskStatusFilter === 'done' && task.state === 'succeeded')
+      || (taskStatusFilter === 'attention' && ['failed', 'cancelled'].includes(task.state));
+    return inSearch && inStatus;
+  }));
+  const taskPagination = $derived(paginateLocal(visibleRoomTasks, taskPage, taskPageSize));
+  const taskLastPage = $derived(taskPagination.lastPage);
+  const currentTaskPage = $derived(taskPagination.page);
+  const pagedRoomTasks = $derived(taskPagination.items);
   const taskCounts = $derived({
     total: roomTasks.length,
     awaiting: roomTasks.filter((task) => task.state === 'pending' || task.state === 'queued').length,
@@ -278,7 +361,11 @@
     }))
   }));
   const workflowPreviewCurrent = $derived(!!workflowPreview && !!validatedWorkflowJson && validatedWorkflowSignature === workflowSignature);
-  const filteredRoles = $derived(starterRoles.filter((role) => [role.name,role.blurb,role.group].join(' ').toLowerCase().includes(search.toLowerCase())));
+  const roleGroups = roleCategories(starterRoles);
+  const filteredRoles = $derived(filterRoleLibrary(starterRoles, search, roleCategory));
+  const visibleRoles = $derived(filteredRoles.slice(0, rolePageSize));
+  const filteredRooms = $derived(filterWorkspaceRooms(snapshot.rooms, roomSearch));
+  const filteredProviders = $derived(filterProviderDirectory(snapshot.providers, probeResults, providerSearch, providerStatusFilter));
 
   function timeDisplay(value: number | string): string {
     // Rust serializes created_at_ms as a number; historical ISO strings also work.
@@ -287,19 +374,112 @@
   }
 
   async function refresh() {
-    isNative = isTauri();
-    runtimeChecked = true;
-    if (!isNative) return;
+    return refreshQueue.enqueue(async () => {
+      isNative = isTauri();
+      runtimeChecked = true;
+      if (!isNative) return;
+      try {
+        // Capture the current selection and scroll immediately before the
+        // ordered fetch, not when an earlier caller enqueued this refresh.
+        const previousRoomId = roomId;
+        const previousRoomMessageIds = new Set(snapshot.messages.filter((message) => message.room_id === previousRoomId).map((message) => message.id));
+        const stayAtBottom = chatNearBottom && messagePage === 0 && !messageQuery.trim();
+        const visibleAnchor = !stayAtBottom ? firstVisibleMessageAnchor() : null;
+        const next = await invoke<Snapshot>('studio_bootstrap');
+        snapshot = { ...next, tasks: next.tasks ?? [] };
+        if (!next.rooms.some((r) => r.id === roomId)) selectRoom(next.rooms[0]?.id ?? '');
+        if (selectedProviderId && selectedProviderId !== 'each-agent' && !next.providers.some((provider) => provider.id === selectedProviderId)) selectedProviderId = '';
+        if (taskFilterRoomId && !next.rooms.some((r) => r.id === taskFilterRoomId)) taskFilterRoomId = '';
+        if (screen === 'rooms') {
+          await tick();
+          if (previousRoomId !== roomId || stayAtBottom) scrollChatToBottom();
+          else {
+            restoreMessageAnchor(visibleAnchor);
+            const added = next.messages.filter((message) => message.room_id === roomId && !previousRoomMessageIds.has(message.id)).length;
+            if (added > 0) unreadMessageCount += added;
+          }
+        }
+        error = '';
+      } catch (cause) {
+        error = `Could not open local workspace: ${String(cause)}`;
+      }
+    });
+  }
+  function chatScrollChanged(event: Event) {
+    const element = event.currentTarget as HTMLDivElement;
+    chatNearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+    if (chatNearBottom && messagePage === 0 && !messageQuery.trim()) unreadMessageCount = 0;
+  }
+  function scrollChatToBottom() {
+    if (!chatScrollElement) return;
+    // An empty room is onboarding, not a transcript: show the introduction
+    // from its beginning instead of accidentally scrolling it out of view.
+    chatScrollElement.scrollTop = messages.length === 0 ? 0 : chatScrollElement.scrollHeight;
+    chatNearBottom = true;
+    unreadMessageCount = 0;
+  }
+  function firstVisibleMessageAnchor(): { id: string; top: number } | null {
+    if (!chatScrollElement) return null;
+    const containerTop = chatScrollElement.getBoundingClientRect().top;
+    const first = [...chatScrollElement.querySelectorAll<HTMLElement>('[data-message-id]')]
+      .find((element) => element.getBoundingClientRect().bottom > containerTop + 8);
+    return first ? { id: first.dataset.messageId ?? '', top: first.getBoundingClientRect().top } : null;
+  }
+  function restoreMessageAnchor(anchor: { id: string; top: number } | null) {
+    if (!anchor || !chatScrollElement) return;
+    const visible = [...chatScrollElement.querySelectorAll<HTMLElement>('[data-message-id]')]
+      .find((element) => element.dataset.messageId === anchor.id);
+    if (visible) chatScrollElement.scrollTop += visible.getBoundingClientRect().top - anchor.top;
+  }
+  async function jumpToLatestMessage() {
+    messageQuery = '';
+    messagePage = 0;
+    await tick();
+    scrollChatToBottom();
+  }
+  async function showMessagePage(nextPage: number) {
+    messagePage = Math.max(0, Math.min(maxMessagePage, nextPage));
+    await tick();
+    chatScrollElement?.querySelector<HTMLElement>('[data-message-id]')?.scrollIntoView({ block: 'start', behavior: 'auto' });
+    chatNearBottom = false;
+  }
+  async function hydrateComposerDrafts() {
+    if (!isNative || draftReady) return;
     try {
-      const next = await invoke<Snapshot>('studio_bootstrap');
-      snapshot = { ...next, tasks: next.tasks ?? [] };
-      if (!next.rooms.some((r) => r.id === roomId)) selectRoom(next.rooms[0]?.id ?? '');
-      if (selectedProviderId && selectedProviderId !== 'each-agent' && !next.providers.some((provider) => provider.id === selectedProviderId)) selectedProviderId = '';
-      if (taskFilterRoomId && !next.rooms.some((r) => r.id === taskFilterRoomId)) taskFilterRoomId = '';
-      error = '';
+      const rows = await invoke<StoredDraft[]>('studio_list_room_drafts');
+      draftPersistence.hydrate(rows);
+      draftsByRoom = Object.fromEntries(rows.map((entry) => [entry.room_id, entry.content]));
+      draft = draftsByRoom[roomId] ?? '';
+      draftReady = true;
+      draftLoadError = '';
     } catch (cause) {
-      error = `Could not open local workspace: ${String(cause)}`;
+      draftLoadError = `Could not recover saved composer drafts: ${String(cause)}. Retry before writing.`;
     }
+  }
+  function changeComposerDraft(value: string) {
+    if (!draftReady || !roomId) return;
+    draft = value;
+    draftsByRoom = { ...draftsByRoom, [roomId]: value };
+    draftPersistence.change(roomId, value);
+  }
+  function handleComposerKeydown(event: KeyboardEvent) {
+    const action = composerEnterAction(event, composerCompositionActive, composerLastCompositionEnd);
+    if (action === 'keep-editing') return;
+    event.preventDefault();
+    if (action === 'send') void sendMessage();
+  }
+  async function restoreSavedDraft() {
+    const target = roomId;
+    if (!target || busy || replyBusy) return;
+    try {
+      const rows = await invoke<StoredDraft[]>('studio_list_room_drafts');
+      const row = rows.find((item) => item.room_id === target);
+      draftPersistence.replaceFromDisk(target, row);
+      const saved = row?.content ?? '';
+      draftsByRoom = { ...draftsByRoom, [target]: saved };
+      if (roomId === target) draft = saved;
+      notice = 'Reloaded the draft saved on this device. Local unsaved changes for this room were discarded.';
+    } catch (cause) { error = `Cannot reload this draft while a save is active: ${String(cause)}`; }
   }
   function setTheme(mode: 'system' | 'light' | 'dark') {
     themeMode = mode;
@@ -308,13 +488,50 @@
     try { window.localStorage.setItem('constellation-appearance', mode); }
     catch { /* User storage can be disabled; keep the session's selection. */ }
   }
+  async function setUiZoom(percent: number) {
+    if (!isNative || uiZoomBusy || !supportedZoomLevels.some((level) => level === percent)) return;
+    uiZoomBusy = true;
+    uiZoomError = '';
+    try {
+      const applied = await invoke<number>('studio_set_ui_zoom', { percent });
+      if (applied !== percent) throw new Error('Native zoom acknowledgement differs from selection');
+      uiZoomPercent = percent;
+      try { window.localStorage.setItem('constellation-ui-zoom', String(percent)); }
+      catch { /* local preference persistence may be disabled */ }
+    } catch {
+      uiZoomError = 'Native page zoom is unavailable on this device. The previous zoom is unchanged.';
+    } finally {
+      uiZoomBusy = false;
+    }
+  }
 
   onMount(() => {
     try {
       const saved = window.localStorage.getItem('constellation-appearance');
       if (saved === 'light' || saved === 'dark') setTheme(saved);
     } catch { /* Use OS appearance without browser storage. */ }
-    void refresh();
+    void (async () => {
+      await refresh();
+      await hydrateComposerDrafts();
+      // Restore only a valid local preference after native runtime startup.
+      // Renderer storage is never treated as a native zoom receipt.
+      try {
+        const saved = Number(window.localStorage.getItem('constellation-ui-zoom'));
+        if (saved !== 100 && supportedZoomLevels.some((level) => level === saved)) {
+          await setUiZoom(saved);
+        }
+      } catch { /* Use the WebView's initial 100% zoom. */ }
+    })();
+    const warnUnsaved = (event: BeforeUnloadEvent) => {
+      if (!draftPersistence.hasUnsaved()) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnUnsaved);
+    return () => {
+      window.removeEventListener('beforeunload', warnUnsaved);
+      draftPersistence.dispose();
+    };
   });
 
   async function createRoom() {
@@ -323,7 +540,14 @@
     try {
       const created = await invoke<Room>('studio_create_room', { title: newRoom.trim() });
       newRoom = '';
-      await refresh(); selectRoom(created.id); dialog = null; screen = 'rooms';
+      await refresh(); selectRoom(created.id);
+      if (taskSetupReturn === 'new-room') {
+        taskRoomId = created.id;
+        taskSetupReturn = null;
+        dialog = 'new-task';
+        await focusCurrentDialogField();
+        notice = 'Room created. Continue planning your task.';
+      } else { dialog = null; screen = 'rooms'; }
     } catch (cause) { error = String(cause); }
     finally { working = false; }
   }
@@ -332,15 +556,25 @@
     if (!isNative) return;
     working = true; error = '';
     try {
+      const beforeIds = new Set(snapshot.agents.map((agent) => agent.id));
       await invoke('studio_add_agent', { role: roleName, name: name.trim() || roleName });
-      await refresh(); dialog = null; screen = 'rooms';
-      notice = `${name.trim() || roleName} added. Choose a provider before asking this agent to reply.`;
+      await refresh();
+      if (taskSetupReturn === 'new-agent') {
+        taskAgentId = snapshot.agents.find((agent) => !beforeIds.has(agent.id))?.id ?? taskAgentId;
+        taskSetupReturn = null;
+        dialog = 'new-task';
+        await focusCurrentDialogField();
+        notice = 'Agent created. Continue planning your task.';
+      } else {
+        dialog = null; screen = 'rooms';
+        notice = `${name.trim() || roleName} added. Choose a provider before asking this agent to reply.`;
+      }
     } catch (cause) { error = String(cause); }
     finally { working = false; }
   }
 
   async function sendMessage() {
-    if (!draft.trim() || !roomId || !isNative || busy || replyBusy) return;
+    if (!draft.trim() || !roomId || !isNative || !draftReady || busy || replyBusy) return;
     const content = draft.trim();
     const targetRoomId = roomId;
     // Stable IDs let an uncertain native IPC failure be retried without
@@ -353,21 +587,39 @@
     let persisted = false;
     busy = true; error = '';
     try {
-      await invoke('studio_send_message', {
-        roomId: targetRoomId, content, messageId: pending.messageId, operationId: pending.operationId
+      if (!(await draftPersistence.flush(targetRoomId))) {
+        throw new Error('Draft could not be saved locally. Resolve the draft error before sending.');
+      }
+      const expectedDraftRevision = draftPersistence.savedRevision(targetRoomId, content);
+      if (expectedDraftRevision === null) {
+        throw new Error('The saved draft changed; review it before sending.');
+      }
+      await invoke('studio_send_saved_draft', {
+        roomId: targetRoomId, content, messageId: pending.messageId,
+        operationId: pending.operationId, expectedDraftRevision,
       });
       persisted = true;
       delete pendingSendsByRoom[targetRoomId];
-      // A room switch or further typing can occur while native IPC is pending.
-      // Clear only the original submitted text, never another room's draft.
-      if (roomId === targetRoomId && draft.trim() === content) draft = '';
-      if ((draftsByRoom[targetRoomId] ?? '').trim() === content) {
+      // The message and tombstone were committed together. Reconcile the
+      // in-memory draft without a second native write or silent data loss.
+      const draftCleared = draftPersistence.confirmSent(targetRoomId, content, expectedDraftRevision);
+      if (draftCleared && (draftsByRoom[targetRoomId] ?? '').trim() === content) {
         draftsByRoom = { ...draftsByRoom, [targetRoomId]: '' };
+        if (roomId === targetRoomId && draft.trim() === content) draft = '';
       }
       await refresh();
       // Sending saves locally. External inference is a separate, explicit action.
       replyFeedbackByRoom = { ...replyFeedbackByRoom, [targetRoomId]: { providerName: '', replies: [], requestedIds: [] } };
-      notice = 'Message saved locally. Choose a provider and use Ask selected or Ask team to request a reply.';
+      notice = draftCleared
+        ? 'Message saved locally. Choose a provider and use Ask selected or Ask team to request a reply.'
+        : 'Message saved. Newer edits remain in the composer and will be saved separately.';
+      // The success banner changes available transcript height after refresh.
+      // Re-anchor only the room whose message was just saved, after the
+      // banner/composer reflow, so the new message is actually visible.
+      if (roomId === targetRoomId && !messageQuery.trim() && messagePage === 0) {
+        await tick();
+        scrollChatToBottom();
+      }
     } catch (cause) {
       error = persisted ? `Message was saved, but the room could not refresh: ${String(cause)}` : `Could not confirm the message was saved: ${String(cause)}. Retrying the same text in this session will reuse its operation ID.`;
       if (!persisted && roomId === targetRoomId) draft = content;
@@ -377,10 +629,17 @@
 
   function selectRoom(nextId: string) {
     if (nextId !== roomId) {
-      draftsByRoom = { ...draftsByRoom, [roomId]: draft };
+      if (roomId && draftReady) {
+        draftsByRoom = { ...draftsByRoom, [roomId]: draft };
+        void draftPersistence.flush(roomId);
+      }
       draft = draftsByRoom[nextId] ?? '';
       roomId = nextId;
       messagePage = 0;
+      messageQuery = '';
+      unreadMessageCount = 0;
+      chatNearBottom = true;
+      void tick().then(scrollChatToBottom);
       // Explicitly reconfirm the recipient model for each new room. Keeping
       // the previous room's selected provider could export unrelated history.
       selectedProviderId = '';
@@ -391,6 +650,78 @@
   function toggleAgent(id: string, checked: boolean) {
     const ids = checked ? [...new Set([...selectedAgentIds, id])] : selectedAgentIds.filter((selected) => selected !== id);
     selectedAgentsByRoom = { ...selectedAgentsByRoom, [roomId]: ids };
+  }
+
+  async function removeWorkerFromRoom(worker: Agent) {
+    if (!isNative || working || busy || replyBusy || workflowBusy || !room || !selectedAgentIds.includes(worker.id)) return;
+    // Removing one worker from a room is reversible and never changes the
+    // workspace roster or historical attribution.
+    if (unsavedRoomTeam) {
+      toggleAgent(worker.id, false);
+      notice = `${worker.name} unchecked. Save room team to persist the change; your other edits are still unsaved.`;
+      return;
+    }
+    const currentRoomId = room.id;
+    const nextIds = (room.members_configured ? room.member_ids : selectedAgentIds).filter((id) => id !== worker.id);
+    working = true; error = '';
+    try {
+      await invoke('studio_set_room_members', {
+        roomId: currentRoomId,
+        memberIds: nextIds,
+        expectedMemberIds: room.members_configured ? room.member_ids : null,
+      });
+      const remaining = { ...selectedAgentsByRoom };
+      delete remaining[currentRoomId];
+      selectedAgentsByRoom = remaining;
+      await refresh();
+      notice = `${worker.name} removed from this room. Other rooms and saved history are unchanged.`;
+    } catch {
+      error = 'Could not remove worker from room. Another window may have edited this team. Reload and try again; history is unchanged.';
+    } finally { working = false; }
+  }
+
+  async function removeUnusedWorker(worker: Agent) {
+    if (!isNative || !Number.isSafeInteger(worker.created_at_ms) || working || busy || replyBusy || workflowBusy || removeWorkerCandidate !== worker.id) return;
+    working = true; error = '';
+    try {
+      await invoke('studio_remove_unused_agent', {
+        agentId: worker.id,
+        expectedName: worker.name,
+        expectedRole: worker.role,
+        expectedProviderId: worker.provider_id ?? null,
+        expectedCreatedAtMs: worker.created_at_ms,
+      });
+      removeWorkerCandidate = '';
+      await refresh();
+      notice = `${worker.name} removed from the local worker roster. No model request was made.`;
+    } catch {
+      removeWorkerCandidate = '';
+      error = 'Worker removal denied. Remove the worker from saved rooms first; workers with messages, tasks or workflow history must be retained. A changed worker cannot be deleted from a stale window.';
+    } finally { working = false; }
+  }
+
+  async function saveRoomTeam() {
+    if (!isNative || working || replyBusy || busy || !room || !unsavedRoomTeam || selectedAgentIds.length > 8) return;
+    const targetRoomId = room.id;
+    const memberIds = [...selectedAgentIds];
+    working = true; error = '';
+    try {
+      await invoke('studio_set_room_members', {
+        roomId: targetRoomId, memberIds,
+        expectedMemberIds: room.members_configured ? room.member_ids : null,
+      });
+      // Discard the draft only for the room saved. Concurrent room selection
+      // or new checkbox input must not be clobbered by a stale IPC response.
+      if (JSON.stringify(selectedAgentsByRoom[targetRoomId]) === JSON.stringify(memberIds)) {
+        const remaining = { ...selectedAgentsByRoom };
+        delete remaining[targetRoomId];
+        selectedAgentsByRoom = remaining;
+      }
+      await refresh();
+      notice = 'Room team saved locally. This selection does not grant model or tool permissions.';
+    } catch {
+      error = 'Could not save room team. Another window may have changed it; reload the room before retrying. No model request was sent.';
+    } finally { working = false; }
   }
 
   // The Rust command reports one outcome per agent. Missing/invalid outcomes
@@ -585,6 +916,26 @@
     providerModel = '';
     providerKey = '';
     providerRememberKey = false;
+    providerRevisionSourceId = '';
+    providerRevisionSavedKey = false;
+    dialog = 'provider';
+  }
+
+  function openProviderRevision(profile: Provider) {
+    const template = prepareProviderRevision(profile);
+    // The dialog never retrieves, copies or reveals any existing API secret.
+    if (!Object.prototype.hasOwnProperty.call(providerPresets, template.kind)) {
+      error = 'This legacy provider format cannot be revised with the current form.';
+      return;
+    }
+    providerRevisionSourceId = template.sourceId;
+    providerRevisionSavedKey = template.sourceRememberedKey;
+    providerName = template.name;
+    providerKind = template.kind as ProviderKind;
+    providerEndpoint = template.endpoint;
+    providerModel = template.model;
+    providerKey = template.key;
+    providerRememberKey = template.rememberKey;
     dialog = 'provider';
   }
 
@@ -592,8 +943,33 @@
     if (dialog === 'provider') {
       providerKey = '';
       providerRememberKey = false;
+      providerRevisionSourceId = '';
+      providerRevisionSavedKey = false;
     }
     dialog = null;
+    taskSetupReturn = null;
+  }
+  async function focusCurrentDialogField() {
+    await tick();
+    document.querySelector<HTMLElement>('.modal input:not([disabled]), .modal select:not([disabled])')?.focus();
+  }
+
+  async function copyMessageText(content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+      notice = 'Message text copied. Nothing was sent to an AI provider.';
+    } catch (cause) {
+      error = `Could not copy message text: ${String(cause)}`;
+    }
+  }
+
+  async function copyProviderField(value: string, description: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      notice = `${description} copied to clipboard. No connection was opened and no API key was copied.`;
+    } catch {
+      error = `Could not copy ${description.toLowerCase()}. Review your clipboard permissions.`;
+    }
   }
 
   async function copyTranscript() {
@@ -614,6 +990,8 @@
     evidenceSearched = false;
     evidenceError = '';
     evidenceSavedResults = false;
+    evidenceSavedOffset = 0;
+    evidenceSavedHasMore = false;
     evidenceNotice = '';
   }
 
@@ -814,19 +1192,23 @@
     }
   }
 
-  async function searchSavedEvidence() {
+  async function searchSavedEvidence(offset = 0) {
     const query = evidenceQuery.trim();
-    if (!isNative || evidenceBusy || !query || queryTooLarge) return;
+    if (!isNative || evidenceBusy || !query || queryTooLarge ||
+        !Number.isSafeInteger(offset) || offset < 0 || offset > 990 || offset % 10 !== 0) return;
     evidenceBusy = true;
     evidenceError = '';
     evidenceHits = [];
     evidenceSearched = false;
     try {
-      const response = await invoke<{ results: EvidenceHit[]; model_called: boolean; stored: boolean }>(
-        'studio_search_saved_evidence', { query }
+      const response = await invoke<{ results: EvidenceHit[]; model_called: boolean; stored: boolean; offset: number; page_size: number; max_ranked_hits: number; has_more: boolean }>(
+        'studio_search_saved_evidence', { query, offset }
       );
       if (response.model_called !== false || response.stored !== true ||
-        !Array.isArray(response.results) || response.results.length > 10) throw new Error('Invalid saved search');
+        response.offset !== offset || response.page_size !== 10 || response.max_ranked_hits !== 1_000 ||
+        typeof response.has_more !== 'boolean' ||
+        !Array.isArray(response.results) || response.results.length > 10 ||
+        (response.has_more && response.results.length !== 10)) throw new Error('Invalid saved search');
       // Independently check each quoted byte range against the exact saved
       // source fetched through trusted Rust. If it changes, discard results.
       const sourceIds = [...new Set(response.results.map((hit) => hit.source_id))];
@@ -850,6 +1232,8 @@
       evidenceHits = response.results;
       evidenceSearched = true;
       evidenceSavedResults = true;
+      evidenceSavedOffset = response.offset;
+      evidenceSavedHasMore = response.has_more;
       await refreshSavedEvidence();
     } catch {
       if (evidenceQuery.trim() === query) evidenceError = 'Saved-source search could not be verified.';
@@ -885,6 +1269,9 @@
     const query = evidenceQuery.trim();
     evidenceHits = [];
     evidenceSearched = false;
+    evidenceSavedResults = false;
+    evidenceSavedOffset = 0;
+    evidenceSavedHasMore = false;
     evidenceError = '';
     if (!sourceText.trim() || !query) {
       evidenceError = 'Add a document and search terms.';
@@ -1556,18 +1943,30 @@
     return JSON.stringify({ schema_version: 1, workflow_id: id, steps });
   }
 
-  async function loadWorkflows() {
-    if (!isNative || workflowLoading) return;
+  async function loadWorkflows(targetOffset = workflowOffset, searchTerm = workflowAppliedSearch) {
+    if (!isNative || workflowLoading || workflowBusy || workflowCancelBusy ||
+        !Number.isSafeInteger(targetOffset) || targetOffset < 0 ||
+        targetOffset > 100_000 || targetOffset % workflowPageSize !== 0) return;
+    if (new TextEncoder().encode(searchTerm).length > 128 || /[\x00-\x1f\x7f]/.test(searchTerm)) {
+      workflowError = 'Search must be at most 128 UTF-8 bytes, without control characters.';
+      return;
+    }
     workflowLoading = true;
+    workflowError = '';
     try {
-      const response = await invoke<WorkflowListResponse>('studio_list_workflows');
-      if (!Array.isArray(response.items) || response.items.length > 100 || typeof response.has_more !== 'boolean' ||
+      const response = await invoke<WorkflowListResponse>('studio_list_workflows', { offset: targetOffset, query: searchTerm });
+      if (!Array.isArray(response.items) || response.items.length > workflowPageSize ||
+          response.max_items !== workflowPageSize || response.offset !== targetOffset || response.query !== searchTerm ||
+          typeof response.has_more !== 'boolean' ||
+          (response.has_more && response.items.length !== workflowPageSize) ||
           !response.items.every((item) => item.definition && typeof item.definition.workflow_id === 'string' &&
             Array.isArray(item.definition.steps) && Array.isArray(item.ready_step_ids) &&
             Number.isSafeInteger(item.revision) && typeof item.cancelled === 'boolean')) {
         throw new Error('Invalid workflow list response');
       }
       savedWorkflows = response.items;
+      workflowOffset = response.offset;
+      workflowAppliedSearch = response.query;
       workflowHasMore = response.has_more;
       workflowLoaded = true;
     } catch {
@@ -1630,6 +2029,11 @@
         throw new Error('Invalid native save confirmation');
       }
       workflowNotice = 'Workflow saved locally. No AI requests or device tools started.';
+      // Reveal the newly saved record even when the user had been browsing a
+      // different history page or filtering by an unrelated identifier.
+      workflowOffset = 0;
+      workflowSearchQuery = id;
+      workflowAppliedSearch = id;
       workflowDraftId = '';
       workflowPreview = null;
       validatedWorkflowJson = '';
@@ -1786,6 +2190,10 @@
 
   async function saveProvider() {
     if (!isNative || working || !providerName.trim() || !providerEndpoint.trim() || !providerModel.trim()) return;
+    if (providerRevisionSourceId && providerRevisionSavedKey && !providerKey.trim()) {
+      error = 'This connection has a remembered key. Enter a replacement API key before saving a revision, or close the dialog without changing it.';
+      return;
+    }
     if (providerRememberKey && !providerKey.trim()) {
       error = 'Enter an API key before choosing secure OS credential storage.';
       return;
@@ -1801,10 +2209,14 @@
       providerRememberKey = false;
       // A previous probe is invalid after profile or in-memory key changes.
       probeResults = {};
+      const wasRevision = !!providerRevisionSourceId;
       await refresh(); dialog = null;
+      providerRevisionSourceId = '';
+      providerRevisionSavedKey = false;
       notice = persistInOs
         ? `${providerPreset.label} saved. Its API key was stored in this operating system account's credential manager; no model request was sent.`
         : `${providerPreset.label} profile saved locally. No request was sent; any API key is session-only and may need re-entry after restart.`;
+      if (wasRevision) notice += ' If endpoint, name, model or format changed, the original profile remains available until separately retired.';
     } catch (cause) { error = String(cause); }
     finally { working = false; }
   }
@@ -1829,7 +2241,55 @@
     }
   }
 
+  async function removeUnusedProvider(provider: Provider) {
+    if (!isNative || working || replyBusy || workflowBusy || !!probeBusyId || provider.remembered_key || providerRemovalCandidate !== provider.id) return;
+    working = true; error = '';
+    try {
+      await invoke('studio_remove_unused_provider', {
+        providerId: provider.id,
+        expectedName: provider.name,
+        expectedEndpoint: provider.endpoint,
+        expectedModel: provider.model,
+        expectedKind: provider.kind ?? 'openai_chat',
+      });
+      if (selectedProviderId === provider.id) selectedProviderId = '';
+      const results = { ...probeResults }; delete results[provider.id]; probeResults = results;
+      providerRemovalCandidate = '';
+      await refresh();
+      notice = 'Unused provider removed from this local workspace. No network request was sent.';
+    } catch {
+      providerRemovalCandidate = '';
+      error = 'Removal was denied. The connection may have changed or still be referenced by an agent, a task, a message, a workflow or stored credentials. Nothing was removed; check your assignments and history.';
+    } finally { working = false; }
+  }
+  async function forgetRememberedProviderKey(provider: Provider) {
+    if (!isNative || working || replyBusy || workflowBusy || !!probeBusyId ||
+        !provider.remembered_key || providerForgetCandidate !== provider.id ||
+        providerForgetConfirmation !== provider.name) return;
+    working = true; error = '';
+    try {
+      await invoke('studio_forget_remembered_provider_key', {
+        providerId: provider.id,
+        expectedName: provider.name,
+        expectedEndpoint: provider.endpoint,
+        expectedModel: provider.model,
+        expectedKind: provider.kind ?? 'openai_chat',
+        confirmedName: providerForgetConfirmation,
+      });
+      providerForgetCandidate = '';
+      providerForgetConfirmation = '';
+      const results = { ...probeResults }; delete results[provider.id]; probeResults = results;
+      await refresh();
+      notice = 'Saved API key deleted from the operating system credential manager. Connection identity and history were preserved. Enter a new key to request further replies.';
+    } catch {
+      providerForgetCandidate = '';
+      providerForgetConfirmation = '';
+      error = 'Could not verify key deletion and profile update. No request was sent. Reopen Settings to inspect the current credential status before using this provider.';
+    } finally { working = false; }
+  }
+
   function openTaskDialog(preferredRoomId?: string) {
+    taskSetupReturn = null;
     taskRoomId = preferredRoomId || taskFilterRoomId || roomId || snapshot.rooms[0]?.id || '';
     taskAgentId = (selectedAgentsByRoom[taskRoomId] ?? selectedAgentIds)[0] || snapshot.agents[0]?.id || '';
     taskInstructions = '';
@@ -1893,30 +2353,67 @@
 
   function taskProviderId(task: StudioTask): string {
     const agent = snapshot.agents.find((entry) => entry.id === task.agent_id);
-    const id = usingAgentProviders ? agent?.provider_id : selectedProviderId;
+    // A task's explicitly selected model cannot silently change when the user
+    // switches chat rooms or changes the model for another task.
+    const choice = taskProviders[task.id] ?? '';
+    const id = choice === 'each-agent' ? agent?.provider_id : choice;
     return id && snapshot.providers.some((profile) => profile.id === id) ? id : '';
   }
 
   function keyboard(event: KeyboardEvent) {
     if (event.isComposing || event.keyCode === 229) return;
+    const target = event.target;
+    const editing = target instanceof HTMLElement && !!target.closest('input, textarea, select, [contenteditable="true"]');
+    if (!dialog && !editing && (event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey) {
+      const sections: Screen[] = ['home', 'rooms', 'tasks', 'evidence', 'library', 'settings'];
+      const index = Number(event.key) - 1;
+      if (Number.isInteger(index) && index >= 0 && index < sections.length) {
+        event.preventDefault();
+        navigate(sections[index]);
+        return;
+      }
+      if (event.key === ',') {
+        event.preventDefault();
+        navigate('settings');
+        return;
+      }
+    }
     if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'f' && screen === 'rooms' && !dialog) {
       event.preventDefault();
       focusMode = !focusMode;
       if (focusMode) { showDetails = false; sidebarOpen = false; }
       return;
     }
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); dialog = 'commands'; }
+    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey && event.key.toLowerCase() === 'k') {
+      event.preventDefault();
+      // Do not discard another modal's unsaved form state or move focus to a
+      // newly replaced field inside the same dialog node.
+      if (!dialog) dialog = 'commands';
+      if (!dialog || dialog === 'commands') void focusCurrentDialogField();
+      return;
+    }
     if (event.key === 'Escape') {
       if (dialog) closeDialog();
       else if (focusMode) focusMode = false;
-      else showDetails = false;
+      else if (sidebarOpen) {
+        sidebarOpen = false;
+        document.querySelector<HTMLButtonElement>('.mobile-menu')?.focus();
+      } else showDetails = false;
     }
   }
 
   function focusDialog(node: HTMLElement) {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const selector = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-    (node.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled]), .command-list button') ?? node.querySelector<HTMLElement>(selector))?.focus();
+    let active = true;
+    // Palette options are controlled by aria-activedescendant and intentionally
+    // tabindex=-1; they must not be counted as Tab stops in the modal trap.
+    const selector = 'button:not([disabled]):not([tabindex="-1"]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    // The action may mount before its nested dialog content is settled.
+    // Never steal focus after the user has already selected another field.
+    void tick().then(() => {
+      if (!active || !node.isConnected || node.contains(document.activeElement)) return;
+      (node.querySelector<HTMLElement>('input:not([disabled]), select:not([disabled])') ?? node.querySelector<HTMLElement>(selector))?.focus();
+    });
     function trapTab(event: KeyboardEvent) {
       if (event.key !== 'Tab') return;
       const controls = Array.from(node.querySelectorAll<HTMLElement>(selector));
@@ -1927,7 +2424,15 @@
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     }
     node.addEventListener('keydown', trapTab);
-    return { destroy() { node.removeEventListener('keydown', trapTab); previousFocus?.focus(); } };
+    return { destroy() {
+      active = false;
+      node.removeEventListener('keydown', trapTab);
+      void tick().then(() => {
+        // Replacing one modal with another must not restore focus outside the
+        // new modal. Return focus only on a genuine dismissal.
+        if (previousFocus?.isConnected && !document.querySelector('[aria-modal="true"]')) previousFocus?.focus();
+      });
+    } };
   }
 
   function navigate(next: Screen) {
@@ -1936,6 +2441,38 @@
     if (next !== 'rooms') focusMode = false;
     closeDialog();
     sidebarOpen = false;
+  }
+  function openCommandAction(action: WorkspaceAction) {
+    dialog = action;
+    void focusCurrentDialogField();
+  }
+  function continueTaskSetup(action: 'new-room' | 'new-agent') {
+    taskSetupReturn = action;
+    dialog = action;
+    void focusCurrentDialogField();
+  }
+  function openCommandRoom(id: string) {
+    selectRoom(id);
+    navigate('rooms');
+  }
+  async function openRoomTeamEditor() {
+    if (!room) {
+      dialog = 'new-room';
+      await focusCurrentDialogField();
+      return;
+    }
+    focusMode = false;
+    showDetails = false;
+    sidebarOpen = false;
+    await tick();
+    const picker = document.querySelector<HTMLDetailsElement>('.reply-agent-picker');
+    if (!picker) {
+      notice = 'Add a teammate to your workspace before configuring room membership.';
+      return;
+    }
+    picker.open = true;
+    picker.querySelector<HTMLElement>('summary')?.focus();
+    picker.scrollIntoView({ block: 'nearest', behavior: 'auto' });
   }
 </script>
 
@@ -1954,7 +2491,7 @@
       <button class:active={screen === 'library'} aria-current={screen === 'library' ? 'page' : undefined} onclick={() => navigate('library')} title="Library" aria-label="Library"><BookOpen size={20}/></button>
     </div>
     <div class="rail-bottom">
-      <button onclick={() => (dialog = 'commands')} title="Command palette" aria-label="Open command palette"><Command size={19}/></button>
+      <button onclick={() => (dialog = 'commands')} title="Search workspace (Ctrl+K)" aria-label="Search workspace (Ctrl+K)"><Command size={19}/></button>
       <button class:active={screen === 'settings'} aria-current={screen === 'settings' ? 'page' : undefined} onclick={() => navigate('settings')} title="Settings" aria-label="Settings"><Settings2 size={20}/></button>
       <div class="profile" title="Local workspace" aria-label="Local workspace">Y</div>
     </div>
@@ -1964,21 +2501,36 @@
     <div class="workspace-heading"><div class="workspace-icon">✧</div><div><strong>My workspace</strong><span>Personal space</span></div><ChevronDown size={15}/></div>
     {#if screen === 'rooms'}
       <div class="sidebar-section-title"><span>CONVERSATIONS</span><button aria-label="Create room" title="Create room" onclick={() => (dialog = 'new-room')}><Plus size={17}/></button></div>
+      {#if snapshot.rooms.length > 0}
+        <div class="room-search"><Search size={15} aria-hidden="true"/><input type="search" aria-label="Filter rooms" placeholder="Find a conversation…" autocomplete="off" bind:value={roomSearch}/>{#if roomSearch}<button type="button" class="room-search-clear" aria-label="Clear room search" onclick={() => (roomSearch = '')}><X size={14}/></button>{/if}</div>
+      {/if}
       <div class="room-list">
-        {#each snapshot.rooms as r (r.id)}
+        {#each filteredRooms as r (r.id)}
           <button class:selected={roomId === r.id} aria-current={roomId === r.id ? 'true' : undefined} class="room-link" onclick={() => selectRoom(r.id)}><span class="room-symbol">#</span><span>{r.name}</span></button>
         {:else}
-          <div class="sidebar-empty">Rooms you create appear here.</div>
+          <div class="sidebar-empty">{snapshot.rooms.length ? 'No rooms match this search.' : 'Rooms you create appear here.'}<button type="button" class="sidebar-empty-action" onclick={() => snapshot.rooms.length ? (roomSearch = '') : (dialog = 'new-room')}>{snapshot.rooms.length ? 'Clear room search' : 'Create a room'} <ArrowRight size={13}/></button></div>
         {/each}
       </div>
-      <div class="sidebar-section-title agent-title"><span>YOUR TEAM</span><button title="Add an agent" aria-label="Add agent" onclick={() => (dialog = 'new-agent')}><Plus size={17}/></button></div>
+      <div class="sidebar-section-title agent-title"><span>{room ? 'ROOM TEAM' : 'YOUR TEAM'}</span><button title="Add an agent" aria-label="Add agent" onclick={() => (dialog = 'new-agent')}><Plus size={17}/></button></div>
       <div class="agent-list">
         {#each snapshot.agents as agent (agent.id)}
-          <div class="agent-item"><div class="agent-avatar">✳</div><span>{agent.name}<small>{agent.role}</small></span><span class="agent-dot" title="Not running"></span></div>
+          <div class="agent-row">
+            <button type="button" class="agent-item" class:in-room={!!room && selectedAgentIds.includes(agent.id)} aria-label={room ? `Edit room membership for ${agent.name}` : `Select a room to work with ${agent.name}`} onclick={() => void openRoomTeamEditor()}><div class="agent-avatar" aria-hidden="true">✳</div><span>{agent.name}<small>{agent.role}</small></span><span class="agent-dot" title={room && selectedAgentIds.includes(agent.id) ? 'Selected for this room' : 'Available for this room'}></span></button>
+            <button type="button" class="agent-remove-action" aria-label={`Remove unused worker ${agent.name} from workspace`} title="Remove unused worker" aria-expanded={removeWorkerCandidate === agent.id} disabled={!isNative || working || busy || replyBusy || workflowBusy} onclick={() => (removeWorkerCandidate = removeWorkerCandidate === agent.id ? '' : agent.id)}><X size={15}/></button>
+          </div>
+          {#if removeWorkerCandidate === agent.id}
+            <div class="agent-remove-confirm" role="group" aria-label={`Confirm removing ${agent.name} from the workspace`}>
+              <p>Remove <strong>{agent.name}</strong> from this device? Only unused workers can be removed. Saved room membership, messages, tasks or workflows will block removal to preserve history.</p>
+              <div><button type="button" class="soft-button small" onclick={() => (removeWorkerCandidate = '')}>Keep worker</button><button type="button" class="soft-button small" disabled={!isNative || working || busy || replyBusy || workflowBusy} onclick={() => void removeUnusedWorker(agent)}>Confirm remove unused</button></div>
+            </div>
+          {/if}
         {:else}
-          <div class="sidebar-empty">Build your team from the role library.</div>
+          <div class="sidebar-empty">No workers yet.<button type="button" class="sidebar-empty-action" onclick={() => (dialog = 'new-agent')}>Add worker <Plus size={13}/></button></div>
         {/each}
       </div>
+      {#if room && snapshot.agents.length > 0}
+        <button type="button" class="sidebar-team-edit" onclick={() => void openRoomTeamEditor()}>Edit room team · {selectedAgentIds.length} selected</button>
+      {/if}
     {:else}
       <div class="sidebar-section-title"><span>WORKSPACE</span></div>
       <div class="section-context">{screen === 'home' ? 'A place to begin' : screen === 'tasks' ? 'Work in progress' : screen === 'evidence' ? 'Private document search' : screen === 'library' ? 'People and capabilities' : 'Your preferences'}</div>
@@ -2009,24 +2561,60 @@
             <div class="hero-footnote"><ShieldCheck size={15}/> Your files and tasks stay on your device unless you approve otherwise.</div>
           </div>
         {:else}
-          <div class="chat-scroll" role="log" aria-label="Conversation history" aria-live="off">
-            <div class="room-intro"><div class="room-intro-icon">#</div><h1>{room.name}</h1><p>{room.description || 'A space for you and your AI teammates to collaborate.'}</p><button class="soft-button small" onclick={() => (dialog = 'new-agent')}><Plus size={15}/> Add a teammate</button></div>
-            {#if messages.length > messagePageSize}
+          <div class="chat-scroll" bind:this={chatScrollElement} onscroll={chatScrollChanged} role="region" aria-label="Conversation history and search">
+            {#if messages.length === 0}
+              <div class="room-intro"><div class="room-intro-icon">#</div><h1>{room.name}</h1><p>{room.description || 'A space for you and your AI teammates to collaborate.'}</p><button class="soft-button small" onclick={() => (dialog = 'new-agent')}><Plus size={15}/> Add a teammate</button></div>
+            {/if}
+            <div class="message-search-bar">
+              <label for="conversation-message-search">Search this conversation</label>
+              <input id="conversation-message-search" type="search" bind:value={messageQuery} oninput={() => (messagePage = 0)} placeholder="Find messages by text or sender…" autocomplete="off" />
+              {#if messageQuery}<button type="button" class="soft-button small" onclick={() => { messageQuery = ''; messagePage = 0; }}>Clear search</button>{/if}
+              <span role="status">{messageQuery.trim() ? `${matchingMessages.length} of ${messages.length} matching messages` : `${messages.length} messages`}</span>
+            </div>
+            {#if !chatNearBottom || unreadMessageCount > 0 || messagePage > 0}
+              <div class="chat-jump-toolbar"><button type="button" class="soft-button small" onclick={() => void jumpToLatestMessage()}>Jump to latest{unreadMessageCount > 0 ? ` · ${unreadMessageCount} new` : ''}</button></div>
+            {/if}
+            {#if matchingMessages.length > messagePageSize}
               <div class="message-pagination" role="group" aria-label="Conversation message pages">
-                <button type="button" class="soft-button small" disabled={messagePage >= maxMessagePage} onclick={() => (messagePage = Math.min(maxMessagePage, messagePage + 1))}>Older messages</button>
-                <span>Showing {Math.max(1, visibleMessageEnd - visibleMessages.length + 1)}–{visibleMessageEnd} of {messages.length}</span>
-                <button type="button" class="soft-button small" disabled={messagePage === 0} onclick={() => (messagePage = Math.max(0, messagePage - 1))}>Newer messages</button>
+                <button type="button" class="soft-button small" disabled={messagePage >= maxMessagePage} onclick={() => void showMessagePage(messagePage + 1)}>Older messages</button>
+                <span>Showing {Math.max(1, visibleMessageEnd - visibleMessages.length + 1)}–{visibleMessageEnd} of {matchingMessages.length}</span>
+                <button type="button" class="soft-button small" disabled={messagePage === 0} onclick={() => void showMessagePage(messagePage - 1)}>Newer messages</button>
               </div>
             {/if}
+            <div role="log" aria-label="Conversation messages" aria-live="off">
             {#each visibleMessages as message (message.id)}
-              <article class="message"><div class:user-avatar={message.sender_kind === 'user'} class="message-avatar">{message.sender_kind === 'user' ? 'Y' : '✳'}</div><div class="message-body"><div class="message-byline"><strong>{message.sender_name}</strong><span>{timeDisplay(message.created_at)}</span>{#if message.simulated}<span class="simulated">Simulation</span>{/if}</div><div class="message-text">{message.body}</div></div></article>
+              <article class="message" data-message-id={message.id}><div class:user-avatar={message.sender_kind === 'user'} class="message-avatar">{message.sender_kind === 'user' ? 'Y' : '✳'}</div><div class="message-body"><div class="message-byline"><strong>{message.sender_name}</strong><span>{timeDisplay(message.created_at)}</span>{#if message.simulated}<span class="simulated">Simulation</span>{/if}<button type="button" class="message-copy" aria-label={'Copy message from ' + message.sender_name} onclick={() => void copyMessageText(message.body)}>Copy message</button></div>
+                <div class="message-content">
+                  {#each splitChatBlocks(message.body) as block, index (index)}
+                    {#if block.kind === 'code'}
+                      <div class="message-code-block"><div class="message-code-heading"><span>{block.language || 'Code'}</span><button type="button" aria-label={'Copy ' + (block.language || 'code') + ' block'} onclick={() => void copyMessageText(block.text)}>Copy code</button></div><pre><code>{block.text}</code></pre></div>
+                    {:else}<div class="message-text">{block.text}</div>{/if}
+                  {/each}
+                </div>
+                </div>
+              </article>
+            {:else}
+              {#if messageQuery.trim()}<p class="message-search-empty" role="status">No messages match this search. Clear the query to see your conversation.</p>{/if}
             {/each}
+            </div>
           </div>
           <div class="composer-container">
             <form class="composer" onsubmit={(event) => {event.preventDefault(); void sendMessage();}}>
-              <textarea bind:value={draft} disabled={busy || replyBusy || !isNative} aria-label="Write a local message" placeholder="Write a message to this room..." rows="2" onkeydown={(event) => {if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && event.keyCode !== 229) {event.preventDefault(); void sendMessage();}}}></textarea>
-              <div class="compose-bottom"><span class="save-local-label"><ShieldCheck size={14}/> Save in this room</span><button class="send-button" type="submit" disabled={!draft.trim() || busy || replyBusy || !isNative} title="Save message locally" aria-label="Save message locally">{#if busy}<Square size={16}/>{:else}<ArrowRight size={19}/>{/if}</button></div>
+              <textarea bind:value={draft} disabled={busy || replyBusy || !isNative || !draftReady} aria-label="Write a local message" placeholder={draftReady ? 'Write a message to this room...' : 'Loading saved drafts...'} rows="2" oninput={(event) => changeComposerDraft(event.currentTarget.value)} oncompositionstart={() => { composerCompositionActive = true; }} oncompositionend={(event) => { composerCompositionActive = false; composerLastCompositionEnd = event.timeStamp; changeComposerDraft(event.currentTarget.value); }} onblur={() => { if (draftReady && roomId) void draftPersistence.flush(roomId); }} onkeydown={handleComposerKeydown}></textarea>
+              <div class="compose-bottom"><span class="save-local-label"><ShieldCheck size={14}/> Save in this room</span><button class="send-button" type="submit" disabled={!draft.trim() || busy || replyBusy || !isNative || !draftReady} title="Save message locally" aria-label="Save message locally">{#if busy}<Square size={16}/>{:else}<ArrowRight size={19}/>{/if}</button></div>
             </form>
+            {#if draftLoadError}
+              <div class="draft-save-feedback error" role="alert"><span>{draftLoadError}</span><button type="button" class="soft-button small" onclick={() => void hydrateComposerDrafts()}>Retry loading drafts</button></div>
+            {:else if draftReady}
+              <div class="draft-save-feedback" role="status" aria-live="polite">
+                <span>{draftStates[roomId] === 'saving' ? 'Saving draft locally…' : draftStates[roomId] === 'unsaved' ? 'Draft has changes not yet saved' : draftStates[roomId] === 'error' ? 'Draft not saved — your text is still in this window' : 'Draft saved locally in this project'}</span>
+                {#if draftStates[roomId] === 'error'}
+                  <span class="draft-save-error">{draftErrors[roomId]}</span>
+                  <button type="button" class="soft-button small" onclick={() => void draftPersistence.flush(roomId)}>Retry save</button>
+                  <button type="button" class="soft-button small" onclick={() => void restoreSavedDraft()}>Discard local changes and reload saved draft</button>
+                {/if}
+              </div>
+            {/if}
             <div class="reply-panel" aria-label="Request AI replies">
               <div class="reply-row">
                 <label class="reply-provider">Model provider
@@ -2039,14 +2627,28 @@
                 <div class="reply-actions"><button type="button" class="soft-button small" disabled={!canAsk} onclick={() => void askAgents('selected')}>Ask selected</button><button type="button" class="primary-button small" disabled={!canAsk || selectedAgentIds.length > 8} onclick={() => void askAgents('team')}>Ask team ({selectedAgentIds.length})</button></div>
               </div>
               {#if snapshot.agents.length > 0}
-                <details class="reply-agent-picker"><summary>Agents · {selectedAgentIds.length} selected <span>Change team</span></summary>
+                <details class="reply-agent-picker"><summary>Agents · {selectedAgentIds.length} selected <span>{unsavedRoomTeam ? 'Unsaved team' : 'Change room team'}</span></summary>
                   <fieldset class="reply-agents" disabled={!isNative || busy || replyBusy}>
                     <legend>Choose one or more agents</legend>
-                    <div class="agent-options">{#each snapshot.agents as agent (agent.id)}<label class:chosen={selectedAgentIds.includes(agent.id)}><input type="checkbox" checked={selectedAgentIds.includes(agent.id)} onchange={(event) => toggleAgent(agent.id, event.currentTarget.checked)}/><span>{agent.name}</span></label>{/each}</div>
+                    <div class="agent-options">{#each snapshot.agents as agent (agent.id)}<button type="button" class:chosen={selectedAgentIds.includes(agent.id)} aria-pressed={selectedAgentIds.includes(agent.id)} aria-label={`${selectedAgentIds.includes(agent.id) ? 'Deselect' : 'Select'} worker ${agent.name} for this room`} onclick={() => toggleAgent(agent.id, !selectedAgentIds.includes(agent.id))}><span aria-hidden="true">{selectedAgentIds.includes(agent.id) ? '✓' : '+'}</span> {agent.name}</button>{/each}</div>
                   </fieldset>
+                  <div class="room-team-controls">
+                    <span role="status">{unsavedRoomTeam ? 'Changes apply to this room now but are not yet saved for the next launch.' : room?.members_configured ? 'This room team is saved on this device.' : 'This older room has no saved team yet; the first agent is suggested.'}</span>
+                    {#if unsavedRoomTeam}
+                      <button type="button" class="soft-button small" disabled={!isNative || working || busy || replyBusy || selectedAgentIds.length > 8} onclick={() => void saveRoomTeam()}>Save room team</button>
+                      <button type="button" class="text-button" disabled={working} onclick={() => { const next = { ...selectedAgentsByRoom }; delete next[roomId]; selectedAgentsByRoom = next; }}>Discard changes</button>
+                    {/if}
+                    {#if selectedAgentIds.length > 0}
+                      <div class="room-team-remove-actions" aria-label="Remove workers from this room">
+                        {#each snapshot.agents.filter((agent) => selectedAgentIds.includes(agent.id)) as agent (agent.id)}
+                          <button type="button" class="soft-button small" disabled={!isNative || working || busy || replyBusy || workflowBusy} onclick={() => void removeWorkerFromRoom(agent)} aria-label={`Remove ${agent.name} from this room`}>Remove {agent.name} from room <X size={12}/></button>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
                 </details>
                 <label class="reply-stream-toggle"><input type="checkbox" bind:checked={streamAnswers} disabled={!isNative || replyBusy} /><span>Show a live text preview as the model responds (supported providers)</span></label>
-                <p class="reply-help">Ask selected contacts the first checked agent. Ask team contacts every checked agent (up to 8). Choose one provider for the team or use the distinct models saved for each agent. Your room context will be sent to every provider contacted.</p>
+                <p class="reply-help">Ask selected contacts the first checked agent. Ask team contacts every checked agent (up to 8). Save the room team to keep your selection after reopening. Team membership is a routing preference, not access control or a tool permission. Your room context will be sent to every provider you explicitly contact.</p>
               {:else}<p class="reply-help">No agents yet. <button type="button" class="text-button" onclick={() => (dialog = 'new-agent')}>Add a teammate</button> before requesting AI replies.</p>{/if}
               {#if snapshot.providers.length === 0}<p class="reply-help">No model providers configured. <button type="button" class="text-button" onclick={openProviderDialog}>Connect a model</button> to ask your team.</p>{/if}
               {#if usingAgentProviders && !assignedProvidersReady}<p class="reply-warning" role="status">Assign an existing model to every selected agent in Settings before using individual model routing.</p>{/if}
@@ -2084,7 +2686,30 @@
       </div>
     {:else if screen === 'home'}
       <header class="topbar"><div class="crumb"><strong>Home</strong></div><span class="privacy-note"><ShieldCheck size={14}/> Your own space</span></header>
-      <div class="content-page"><div class="eyebrow">WELCOME TO CONSTELLATION</div><h1>What will we<br /><em>work on today?</em></h1><p class="page-lede">Start a focused conversation, assemble a small team, and stay in control of every action.</p><div class="action-grid"><button onclick={() => (dialog = 'new-room')}><MessageCircle size={22}/><strong>Start a conversation</strong><span>Make room for a new idea</span><ArrowRight size={18}/></button><button onclick={() => navigate('library')}><UsersRound size={22}/><strong>Find a specialist</strong><span>Choose a helpful AI role</span><ArrowRight size={18}/></button><button onclick={openProviderDialog}><Cpu size={22}/><strong>Connect a model</strong><span>Use a remote API or local server</span><ArrowRight size={18}/></button></div><div class="home-status"><div><div class="local-dot"></div> Your workspace stays on this computer by default</div><span>{snapshot.rooms.length} rooms · {snapshot.agents.length} agents · {snapshot.providers.length} providers</span></div></div>
+      <div class="content-page home-page">
+        <div class="eyebrow">WELCOME TO CONSTELLATION</div><h1>What will we<br /><em>work on today?</em></h1>
+        <p class="page-lede">Start a focused conversation, assemble a small team, and stay in control of every action.</p>
+        <div class="action-grid"><button onclick={() => (dialog = 'new-room')}><MessageCircle size={22}/><strong>Start a conversation</strong><span>Make room for a new idea</span><ArrowRight size={18}/></button><button onclick={() => navigate('library')}><UsersRound size={22}/><strong>Find a specialist</strong><span>Choose a helpful AI role</span><ArrowRight size={18}/></button><button onclick={openProviderDialog}><Cpu size={22}/><strong>Connect a model</strong><span>Use a remote API or local server</span><ArrowRight size={18}/></button></div>
+        {#if homeRooms.length || homeOpenTasks.length}
+          <div class="home-work-grid">
+            <section aria-labelledby="home-rooms-title" class="home-work-panel">
+              <div class="home-work-heading"><h2 id="home-rooms-title">Your rooms</h2><button type="button" class="text-button" onclick={() => navigate('rooms')}>All rooms <ArrowRight size={14}/></button></div>
+              {#each homeRooms as recentRoom (recentRoom.id)}
+                <button type="button" class="home-work-link" onclick={() => openCommandRoom(recentRoom.id)}><span class="room-symbol">#</span><strong>{recentRoom.name}</strong><ChevronRight size={15}/></button>
+              {:else}<p>No rooms created yet.</p>{/each}
+            </section>
+            <section aria-labelledby="home-tasks-title" class="home-work-panel">
+              <div class="home-work-heading"><h2 id="home-tasks-title">Open tasks</h2><button type="button" class="text-button" onclick={() => navigate('tasks')}>All tasks <ArrowRight size={14}/></button></div>
+              {#each homeOpenTasks as activeTask (activeTask.id)}
+                <button type="button" class="home-work-link" onclick={() => { taskFilterRoomId = activeTask.room_id; taskSearch = activeTask.instructions.slice(0, 40); taskStatusFilter = 'all'; taskPage = 0; navigate('tasks'); }}>
+                  <span class="home-task-state" data-state={activeTask.state}>{activeTask.state}</span><strong>{activeTask.instructions}</strong><ChevronRight size={15}/>
+                </button>
+              {:else}<p>No tasks currently awaiting action. Create a task from any room.</p>{/each}
+            </section>
+          </div>
+        {/if}
+        <div class="home-status"><div><div class="local-dot"></div> Your workspace stays on this computer by default</div><span>{snapshot.rooms.length} rooms · {snapshot.agents.length} agents · {snapshot.providers.length} providers</span></div>
+      </div>
     {:else if screen === 'tasks'}
       <header class="topbar"><div class="crumb"><strong>Tasks</strong></div><button class="subtle-cta" onclick={() => openTaskDialog()}><Plus size={16}/> Plan task</button></header>
       <div class="content-page"><div class="eyebrow">WORK, WITHOUT THE GUESSWORK</div><h1>Every step,<br /><em>in the open.</em></h1><p class="page-lede">Plan work for your agents, then explicitly run a text-only task through a model you choose. Results are recorded in the room. The file tool accepts manual actions or bounded model proposals inside the app's private artifacts folder; both require independent native approval.</p>
@@ -2093,26 +2718,13 @@
           <button type="button" class:chosen={tasksView === 'workflows'} aria-pressed={tasksView === 'workflows'} onclick={showWorkflows}>Workflows</button>
         </div>
         {#if tasksView === 'tasks'}
-        <label class="task-provider-selector">Model for task execution
-          <select bind:value={selectedProviderId} disabled={!isNative || !!runningTaskId}>
-            <option value="">Choose a provider (required)…</option>
-            <option value="each-agent">Use the task agent’s saved model</option>
-            {#each snapshot.providers as provider (provider.id)}<option value={provider.id}>{provider.name} · {provider.model} ({providerKindLabel(provider.kind)})</option>{/each}
-          </select>
-        </label>
-        {#if snapshot.providers.length > 0}
-          <div class="task-provider-quick-choices" role="group" aria-label="Choose a model for a task">
-            {#each snapshot.providers as provider (provider.id)}
-              <button type="button" class:chosen={selectedProviderId === provider.id}
-                aria-label={'Use ' + provider.name + ' for task execution'}
-                aria-pressed={selectedProviderId === provider.id}
-                disabled={!isNative || !!runningTaskId}
-                onclick={() => (selectedProviderId = provider.id)}>{provider.name} · {provider.model}</button>
-            {/each}
-          </div>
-        {/if}
-        <p class="task-provider-notice" id="task-run-effects">Choose a model, review the instructions, then press Run. This sends the task text to the provider and may use paid credits. Models cannot execute device tools. Cancelling later cannot recall an already-sent request.</p>
-        <div class="tasks-filter"><label for="tasks-room-filter">Show tasks for</label><select id="tasks-room-filter" bind:value={taskFilterRoomId}><option value="">All rooms</option>{#each snapshot.rooms as taskRoom (taskRoom.id)}<option value={taskRoom.id}>{taskRoom.name}</option>{/each}</select></div>
+        <p class="task-provider-notice" id="task-run-effects">Each task has its own model selection. Review its instructions and provider before Run; the model request may use paid credits. Models cannot execute device tools. Cancelling later cannot recall an already-sent request.</p>
+        <div class="tasks-filter"><label for="tasks-room-filter">Show tasks for</label><select id="tasks-room-filter" bind:value={taskFilterRoomId} onchange={() => (taskPage = 0)}><option value="">All rooms</option>{#each snapshot.rooms as taskRoom (taskRoom.id)}<option value={taskRoom.id}>{taskRoom.name}</option>{/each}</select><label for="tasks-search">Find a task</label><input id="tasks-search" type="search" bind:value={taskSearch} oninput={() => (taskPage = 0)} placeholder="Instructions or agent…" autocomplete="off" /></div>
+        <div class="task-status-filter" role="group" aria-label="Filter tasks by status">
+          {#each [{id:'all',label:'All'},{id:'open',label:'In progress'},{id:'done',label:'Completed'},{id:'attention',label:'Needs attention'}] as filter}
+            <button type="button" class:chosen={taskStatusFilter === filter.id} aria-pressed={taskStatusFilter === filter.id} onclick={() => { taskStatusFilter = filter.id as typeof taskStatusFilter; taskPage = 0; }}>{filter.label}</button>
+          {/each}
+        </div>
         <div class="task-overview" aria-label="Task plan progress">
           <div><strong>{taskCounts.total}</strong><span>All tasks</span></div>
           <div><strong>{taskCounts.awaiting}</strong><span>Awaiting action</span></div>
@@ -2122,9 +2734,12 @@
         </div>
         {#if roomTasks.length === 0}
           <div class="blank-panel"><div class="blank-icon"><Layers3 size={26}/></div><h2>{taskFilterRoomId ? 'No tasks in this room' : 'No tasks planned yet'}</h2><p>Create a room and a teammate, then save a task. Run text-only work manually through your chosen model; device tools are not enabled.</p><button class="soft-button" onclick={() => openTaskDialog()}>Plan your first task <ArrowRight size={15}/></button></div>
+        {:else if visibleRoomTasks.length === 0}
+          <div class="blank-panel"><div class="blank-icon"><Search size={26}/></div><h2>No matching tasks</h2><p>Try another status, room, or search term. Your tasks have not been changed.</p><button class="soft-button" onclick={() => { taskSearch = ''; taskStatusFilter = 'all'; taskFilterRoomId = ''; taskPage = 0; }}>Clear task filters</button></div>
         {:else}
+          <p class="task-filter-count" role="status">Showing {currentTaskPage * taskPageSize + 1}–{currentTaskPage * taskPageSize + pagedRoomTasks.length} of {visibleRoomTasks.length} matching tasks ({roomTasks.length} total)</p>
           <div class="task-list" aria-label="Saved tasks">
-            {#each roomTasks as task (task.id)}
+            {#each pagedRoomTasks as task (task.id)}
               <article class="task-card">
                 <div class="task-card-top"><span class="task-state" data-state={task.state}>{task.state === 'pending' ? 'Pending · Not executed' : task.state === 'cancelled' ? 'Cancelled' : task.state === 'running' ? 'Running · Text request' : task.state}</span><span class="task-date">{timeDisplay(task.created_at)}</span></div>
                 <p class="task-instructions">{task.instructions}</p>
@@ -2133,6 +2748,16 @@
                     <button class="soft-button small" onclick={() => { selectRoom(task.room_id); navigate('rooms'); }}>View room result <ArrowRight size={14}/></button>
                   {/if}
                   {#if task.state === 'pending'}
+                    <label class="task-card-model">Model for task execution
+                      <select aria-label={'Model for task execution: ' + task.instructions.slice(0, 50)} value={taskProviders[task.id] ?? ''} disabled={!isNative || !!runningTaskId} onchange={(event) => { taskProviders = { ...taskProviders, [task.id]: event.currentTarget.value }; }}>
+                        <option value="">Choose a provider for this task…</option>
+                        <option value="each-agent">Use this agent’s saved model</option>
+                        {#each snapshot.providers as provider (provider.id)}<option value={provider.id}>{provider.name} · {provider.model} ({providerKindLabel(provider.kind)})</option>{/each}
+                      </select>
+                    </label>
+                    {#if taskProviderId(task)}
+                      <span class="task-provider-confirmation">Ready to contact {snapshot.providers.find((provider) => provider.id === taskProviderId(task))?.name} · {snapshot.providers.find((provider) => provider.id === taskProviderId(task))?.model}. Only this task’s instructions will be sent.</span>
+                    {:else}<span class="task-provider-confirmation">Choose a configured provider to enable Run. No request has been made.</span>{/if}
                     <button class="primary-button small" aria-describedby="task-run-effects" title={!taskProviderId(task) ? 'Choose a configured model above before running' : 'May send a billable model request'} disabled={!isNative || working || !!runningTaskId || !taskProviderId(task) || (!!multiStepStates[task.id] && multiStepStates[task.id].status !== 'not_started')} onclick={() => void runTask(task.id)}>{runningTaskId === task.id ? 'Running…' : 'Run text task'}</button>
                     <details class="task-extra">
                       <summary>Optional file actions · approval required</summary>
@@ -2295,6 +2920,13 @@
               </article>
             {/each}
           </div>
+          {#if visibleRoomTasks.length > taskPageSize}
+            <nav class="task-pages" aria-label="Task result pages">
+              <button type="button" class="soft-button small" disabled={currentTaskPage === 0 || !!runningTaskId || working} onclick={() => (taskPage = Math.max(0, currentTaskPage - 1))}>Previous tasks</button>
+              <span role="status" aria-live="polite">Page {currentTaskPage + 1} of {taskLastPage + 1}</span>
+              <button type="button" class="soft-button small" disabled={currentTaskPage === taskLastPage || !!runningTaskId || working} onclick={() => (taskPage = Math.min(taskLastPage, currentTaskPage + 1))}>Next tasks</button>
+            </nav>
+          {/if}
         {/if}
         {:else}
           <section class="workflow-workspace" aria-label="Local workflow plans">
@@ -2376,10 +3008,19 @@
             </form>
             <section class="workflow-saved" aria-label="Saved local workflows">
               <div class="workflow-saved-header"><h2>Saved workflows</h2><button type="button" class="soft-button small" disabled={!isNative || workflowLoading || workflowBusy} onclick={() => void loadWorkflows()}>{workflowLoading ? 'Refreshing…' : 'Refresh list'}</button></div>
+              <form class="workflow-search" aria-label="Find saved workflow by ID" onsubmit={(event) => { event.preventDefault(); void loadWorkflows(0, workflowSearchQuery.trim()); }}>
+                <label for="workflow-id-search">Find workflow ID</label>
+                <input id="workflow-id-search" type="search" bind:value={workflowSearchQuery} maxlength="120" placeholder="Search all saved workflow IDs…" autocomplete="off" aria-describedby="workflow-id-search-help" disabled={!isNative || workflowLoading || workflowBusy || workflowCancelBusy} />
+                <button type="submit" class="soft-button small" disabled={!isNative || workflowLoading || workflowBusy || workflowCancelBusy}>Search</button>
+                {#if workflowAppliedSearch}<button type="button" class="soft-button small" disabled={workflowLoading || workflowBusy || workflowCancelBusy} onclick={() => { workflowSearchQuery = ''; void loadWorkflows(0, ''); }}>Clear filter</button>{/if}
+              </form>
+              <p id="workflow-id-search-help" class="workflow-help">Finds matching workflow IDs across all saved pages, entirely on this device. Search is literal, not a wildcard; 128 UTF-8 bytes maximum.</p>
               {#if workflowNotice}<p class="workflow-feedback" role="status" aria-live="polite">{workflowNotice}</p>{/if}
               {#if workflowError}<p class="evidence-error" role="alert">{workflowError}</p>{/if}
               {#if !workflowLoaded}<p class="workflow-help">Open the desktop app and refresh to see locally saved plans.</p>
-              {:else if savedWorkflows.length === 0}<p class="workflow-help">No workflows saved on this device yet.</p>
+              {:else if savedWorkflows.length === 0}
+                <p class="workflow-help">{workflowAppliedSearch ? 'No saved workflows match that ID search.' : workflowOffset === 0 ? 'No workflows saved on this device yet.' : 'No workflows on this page. The list may have changed in another window.'}</p>
+                {#if workflowOffset > 0}<button type="button" class="soft-button small" disabled={workflowLoading} onclick={() => void loadWorkflows(0)}>Return to first page</button>{/if}
               {:else}
                 <div class="workflow-saved-list">
                   {#each savedWorkflows as item (item.definition.workflow_id)}
@@ -2415,9 +3056,9 @@
                       </li>{/each}</ol>
                       </details>
                       {#if !item.cancelled}
-                        <button type="button" class="soft-button small" aria-expanded={workflowCancelConfirmation === item.definition.workflow_id} disabled={!isNative || workflowCancelBusy || workflowLoading} onclick={() => void cancelWorkflow(item)}>{workflowCancelConfirmation === item.definition.workflow_id ? 'Confirm cancel pending steps' : 'Cancel pending steps'}</button>
+                        <button type="button" class="soft-button small" aria-controls={'workflow-cancel-' + item.definition.workflow_id} disabled={!isNative || workflowCancelBusy || workflowLoading} onclick={() => void cancelWorkflow(item)}>{workflowCancelConfirmation === item.definition.workflow_id ? 'Confirm cancel pending steps' : 'Cancel pending steps'}</button>
                         {#if workflowCancelConfirmation === item.definition.workflow_id}
-                          <div class="inline-confirmation" role="group" aria-label="Confirm workflow cancellation">
+                          <div id={'workflow-cancel-' + item.definition.workflow_id} class="inline-confirmation" role="group" aria-label="Confirm workflow cancellation">
                             <span>Stop all pending steps? Already-sent provider requests cannot be recalled.</span>
                             <button type="button" class="soft-button small" onclick={() => workflowCancelConfirmation = ''}>Keep workflow</button>
                           </div>
@@ -2426,7 +3067,13 @@
                     </article>
                   {/each}
                 </div>
-                {#if workflowHasMore}<p class="workflow-help">Showing the first 100 saved workflows. Older records may not be listed here.</p>{/if}
+              {/if}
+              {#if workflowLoaded && (workflowOffset > 0 || workflowHasMore)}
+                <nav class="workflow-pages" aria-label="Saved workflow pages">
+                  <button type="button" class="soft-button small" disabled={!isNative || workflowLoading || workflowBusy || workflowCancelBusy || workflowOffset === 0} onclick={() => void loadWorkflows(Math.max(0, workflowOffset - workflowPageSize))}>Previous page</button>
+                  <span role="status" aria-live="polite">{savedWorkflows.length ? `Workflows ${workflowOffset + 1}–${workflowOffset + savedWorkflows.length}` : `Page ${workflowOffset / workflowPageSize + 1}`} · Page {workflowOffset / workflowPageSize + 1}{workflowAppliedSearch ? ' · Filtered by ID' : ''}</span>
+                  <button type="button" class="soft-button small" disabled={!isNative || workflowLoading || workflowBusy || workflowCancelBusy || !workflowHasMore || workflowOffset >= 100_000} onclick={() => void loadWorkflows(workflowOffset + workflowPageSize)}>Next page</button>
+                </nav>
               {/if}
             </section>
           </section>
@@ -2517,17 +3164,43 @@
           {:else}<p class="evidence-field-note">Saved sources have not been loaded or verified. Select Refresh to inspect this device's project library.</p>{/if}
         </section>
         {#if evidenceSearched}
-          <section class="evidence-results" aria-label="Document evidence results"><h2 role="status">{evidenceHits.length ? `${evidenceHits.length} matching passages ${evidenceSavedResults ? 'from saved sources' : 'from current text'}` : 'No matching passages'}</h2>
+          <section class="evidence-results" aria-label="Document evidence results"><h2 role="status">{evidenceHits.length ? `${evidenceSavedResults ? `Showing ranked matches ${evidenceSavedOffset + 1}–${evidenceSavedOffset + evidenceHits.length} from saved sources` : `${evidenceHits.length} matching passages from current text`}` : 'No matching passages'}</h2>
             <p class="evidence-field-note">Matches are verbatim UTF-8 spans checked against {evidenceSavedResults ? 'the saved source text' : 'this exact current draft'}. A matching passage does not independently validate its claims. Confirm citations in the original document before relying on them.</p>
             {#each evidenceHits as hit (`${hit.source_sha256}-${hit.start_byte}-${hit.end_byte}`)}
-              <article class="evidence-hit"><div class="evidence-hit-meta"><span><FileSearch size={14}/> {hit.relative_path} · UTF-8 bytes [{hit.start_byte}, {hit.end_byte})</span><button type="button" class="soft-button small" onclick={() => void copyEvidence(hit)}>Copy quote and citation</button></div><blockquote>{hit.quote}</blockquote>{#if evidenceAnchorLabel(hit)}<p class="evidence-field-note">Extracted from {evidenceAnchorLabel(hit)}. Verify in the original file; page/paragraph mapping is not saved with extracted text.</p>{/if}<details class="evidence-provenance"><summary>Check exact source SHA-256</summary><div class="evidence-hash">Source SHA-256: {hit.source_sha256}</div></details></article>
+                  <article class="evidence-hit"><div class="evidence-hit-meta"><span><FileSearch size={14}/> {hit.relative_path} · UTF-8 bytes [{hit.start_byte}, {hit.end_byte})</span><button type="button" class="soft-button small" onclick={() => void copyEvidence(hit)}>Copy quote and citation</button></div><blockquote>{hit.quote}</blockquote>{#if evidenceAnchorLabel(hit)}<p class="evidence-field-note">Extracted from {evidenceAnchorLabel(hit)}. Verify in the original file; page/paragraph mapping is not saved with extracted text.</p>{/if}<details class="evidence-provenance"><summary>Check exact source SHA-256</summary><div class="evidence-hash" role="note" aria-label={'Source SHA-256: ' + hit.source_sha256}>Source SHA-256: {hit.source_sha256}</div></details></article>
             {:else}<p class="evidence-empty">Try different terms. No passage is shown without a source match.</p>{/each}
+            {#if evidenceSavedResults && (evidenceSavedOffset > 0 || evidenceSavedHasMore)}
+              <nav class="evidence-pages" aria-label="Saved evidence result pages">
+                <button type="button" class="soft-button small" disabled={evidenceBusy || evidenceSavedOffset === 0} onclick={() => void searchSavedEvidence(Math.max(0, evidenceSavedOffset - 10))}>Previous evidence</button>
+                <span role="status" aria-live="polite">Page {evidenceSavedOffset / 10 + 1} · Top 1,000 ranked matches maximum</span>
+                <button type="button" class="soft-button small" disabled={evidenceBusy || !evidenceSavedHasMore} onclick={() => void searchSavedEvidence(evidenceSavedOffset + 10)}>Next evidence</button>
+              </nav>
+            {/if}
           </section>
         {/if}
       </div>
     {:else if screen === 'library'}
       <header class="topbar"><div class="crumb"><strong>Role library</strong></div><button class="subtle-cta" onclick={() => (dialog = 'new-agent')}><Plus size={16}/> Create agent</button></header>
-      <div class="content-page library-page"><div class="eyebrow">THE RIGHT TEAM FOR ANY IDEA</div><h1>Find your <em>people.</em></h1><p class="page-lede">Browse curated roles. Each role provides tailored guidance when chatting with a model, but no tools, filesystem access, or execution privileges are granted.</p><label class="searchbox"><Search size={18}/><input aria-label="Search agent roles" bind:value={search} placeholder="Search roles..."/></label><div class="roles-grid">{#each filteredRoles as role (role.name)}<div class="role-card"><div class="role-icon">{role.icon}</div><div class="role-group">{role.group}</div><h2>{role.name}</h2><p>{role.blurb}</p><button aria-label={`Create ${role.name} agent`} disabled={!isNative || working} title={!isNative ? 'Available in the installed desktop app' : 'Add to your team'} onclick={() => void createAgent(role.name, role.name)}>Add to team <Plus size={16}/></button></div>{:else}<p>No roles match your search.</p>{/each}</div><p class="library-disclaimer">{starterRoles.length} distinct prompt-only roles. Fully operational tool-enabled agents are still being developed and no tools are granted by selecting a role.</p></div>
+      <div class="content-page library-page">
+        <div class="eyebrow">THE RIGHT TEAM FOR ANY IDEA</div><h1>Find your <em>people.</em></h1>
+        <p class="page-lede">Browse curated roles. Each role provides tailored guidance when chatting with a model, but no tools, filesystem access, or execution privileges are granted.</p>
+        <label class="searchbox"><Search size={18}/><input aria-label="Search agent roles" bind:value={search} oninput={() => (rolePageSize = 24)} placeholder="Search roles..."/></label>
+        <div class="role-category-filters" role="group" aria-label="Filter agent roles by specialty">
+          {#each ['All', ...roleGroups] as group}
+            <button type="button" aria-pressed={roleCategory === group} class:chosen={roleCategory === group} onclick={() => { roleCategory = group; rolePageSize = 24; }}>{group}</button>
+          {/each}
+        </div>
+        <p class="role-result-count" role="status">Showing {Math.min(rolePageSize, filteredRoles.length)} of {filteredRoles.length} matching roles · {starterRoles.length} total</p>
+        <div class="roles-grid">
+          {#each visibleRoles as role (role.name)}
+            <div class="role-card"><div class="role-icon">{role.icon}</div><div class="role-group">{role.group}</div><h2>{role.name}</h2><p>{role.blurb}</p><button aria-label={`Create ${role.name} agent`} disabled={!isNative || working} title={!isNative ? 'Available in the installed desktop app' : 'Add to your team'} onclick={() => void createAgent(role.name, role.name)}>Add to team <Plus size={16}/></button></div>
+          {:else}<div class="role-empty-state"><h2>No matching roles</h2><p>Try another specialty or search term.</p><button type="button" class="soft-button small" onclick={() => { search = ''; roleCategory = 'All'; rolePageSize = 24; }}>Clear role filters</button></div>{/each}
+        </div>
+        {#if visibleRoles.length < filteredRoles.length}
+          <button type="button" class="soft-button role-show-more" onclick={() => (rolePageSize += 24)}>Show 24 more roles · {filteredRoles.length - visibleRoles.length} remaining</button>
+        {/if}
+        <p class="library-disclaimer">{starterRoles.length} distinct prompt-only roles. Fully operational tool-enabled agents are still being developed and no tools are granted by selecting a role.</p>
+      </div>
     {:else}
       <header class="topbar"><div class="crumb"><strong>Settings</strong></div></header>
       <div class="content-page settings-page"><div class="eyebrow">MAKE IT YOURS</div><h1>Your space.<br /><em>Your rules.</em></h1><p class="page-lede">Connect a supported API format or local server. Provider availability and model capabilities depend on your endpoint.</p><div class="settings-block"><div><Cpu size={23}/><div><h2>AI connections</h2><p>Save models and select them for explicit requests.</p></div></div><button class="primary-button" onclick={openProviderDialog}><Plus size={16}/> Add provider</button></div>
@@ -2539,20 +3212,71 @@
             <button type="button" aria-pressed={themeMode === 'dark'} class:chosen={themeMode === 'dark'} onclick={() => setTheme('dark')}>Dark</button>
           </div>
         </div>
+        <div class="settings-block appearance-block">
+          <div><SlidersHorizontal size={23}/><div><h2>Page zoom</h2><p>Enlarge the entire app using native WebView page zoom, including text and controls. Stored only on this device.</p></div></div>
+          <div class="zoom-preferences">
+            <div class="theme-picker" role="group" aria-label="Native WebView page zoom">
+              {#each supportedZoomLevels as percent}
+                <button type="button" disabled={!isNative || uiZoomBusy} aria-pressed={uiZoomPercent === percent} class:chosen={uiZoomPercent === percent} onclick={() => void setUiZoom(percent)}>{percent}%</button>
+              {/each}
+            </div>
+            <span role="status" aria-live="polite">{uiZoomBusy ? 'Applying native zoom…' : `Current page zoom: ${uiZoomPercent}%`}</span>
+            {#if uiZoomError}<p class="evidence-error" role="alert">{uiZoomError}</p>{/if}
+          </div>
+        </div>
         <p class="provider-probe-note">Testing is optional and sends one small text prompt to the explicitly selected provider. An API may charge for this request. A passing test does not prove tool calling, streaming, or structured output.</p>
+        {#if snapshot.providers.length}
+          <div class="provider-directory-controls" role="search" aria-label="Find configured AI providers">
+            <label for="provider-directory-search">Find a provider</label>
+            <input id="provider-directory-search" type="search" placeholder="Name, model, endpoint…" autocomplete="off" bind:value={providerSearch} />
+            <label for="provider-directory-status">Text-test status</label>
+            <select id="provider-directory-status" bind:value={providerStatusFilter}>
+              <option value="all">All</option>
+              <option value="untested">Not tested in this session</option>
+              <option value="text-compatible">Text test passed</option>
+              <option value="attention">Text test needs attention</option>
+            </select>
+            <span role="status">{filteredProviders.length} of {snapshot.providers.length} profiles shown</span>
+          </div>
+        {/if}
         <div class="provider-list">
-          {#each snapshot.providers as provider (provider.id)}
+          {#each filteredProviders as provider (provider.id)}
             {@const result = probeResults[provider.id]}
             <div class="provider-row">
               <div class="provider-symbol"><Cpu size={18}/></div>
-              <div><strong>{provider.name}</strong><span>{providerKindLabel(provider.kind)} · {provider.model}</span><span class="provider-endpoint" title={provider.endpoint}>{provider.endpoint}</span><span>{provider.remembered_key ? 'API key reference saved in OS credential manager' : 'No persistent API key in this profile'}</span></div>
-              <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} onclick={() => void testProvider(provider.id)}>{probeBusyId === provider.id ? 'Testing…' : 'Test text chat'}</button>
+              <div><strong>{provider.name}</strong><span>{providerKindLabel(provider.kind)} · {provider.model}</span><div class="provider-copy-row"><code class="provider-endpoint" title={provider.endpoint}>{provider.endpoint}</code><button type="button" class="soft-button small" aria-label={`Copy URL for ${provider.name}`} onclick={() => void copyProviderField(provider.endpoint, 'Provider URL')}>Copy URL</button><button type="button" class="soft-button small" aria-label={`Copy model ID for ${provider.name}`} onclick={() => void copyProviderField(provider.model, 'Model ID')}>Copy model ID</button></div><span>{provider.remembered_key ? 'API key reference saved in OS credential manager' : 'No persistent API key in this profile'}</span><span class="provider-verification">{result?.status === 'compatible_text' ? 'Text test passed in this session only' : result ? 'Text test needs attention' : 'Not tested in this session'}</span></div>
+              <div class="provider-actions">
+                <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} aria-label={'Revise configuration for ' + provider.name} onclick={() => openProviderRevision(provider)}>Revise</button>
+                <button type="button" class="soft-button small" disabled={!isNative || working || !!probeBusyId} onclick={() => void testProvider(provider.id)}>{probeBusyId === provider.id ? 'Testing…' : 'Test text chat'}</button>
+                {#if !provider.remembered_key}
+                  <button type="button" class="text-button" disabled={!isNative || working || replyBusy || workflowBusy || !!probeBusyId} aria-label={'Remove unused connection ' + provider.name} onclick={() => (providerRemovalCandidate = providerRemovalCandidate === provider.id ? '' : provider.id)}>Remove unused</button>
+                {:else}
+                  <button type="button" class="text-button" disabled={!isNative || working || replyBusy || workflowBusy || !!probeBusyId} aria-label={'Forget stored API key for ' + provider.name} onclick={() => { providerForgetCandidate = providerForgetCandidate === provider.id ? '' : provider.id; providerForgetConfirmation = ''; }}>Forget saved key</button>
+                {/if}
+              </div>
             </div>
+            {#if providerRemovalCandidate === provider.id}
+              <div class="provider-remove-confirm" role="group" aria-label={'Confirm removal of ' + provider.name}>
+                <p>Remove <strong>{provider.name}</strong> from this device? Only credential-free connections with no agent assignments, messages, tasks or saved workflows can be removed. The app will reject referenced or changed profiles. This cannot undo historical exports.</p>
+                <button type="button" class="soft-button small" onclick={() => (providerRemovalCandidate = '')}>Keep connection</button>
+                <button type="button" class="soft-button small" disabled={!isNative || working || replyBusy || workflowBusy || !!probeBusyId} onclick={() => void removeUnusedProvider(provider)}>Confirm remove unused</button>
+              </div>
+            {/if}
+            {#if providerForgetCandidate === provider.id}
+              <div class="provider-remove-confirm" role="group" aria-label={'Confirm forgetting stored API key for ' + provider.name}>
+                <p>Delete the API key for <strong>{provider.name}</strong> from this operating system account? The provider profile, assigned agents, tasks, messages and workflow history will stay. New requests will need another key. Already-running requests may still complete; wait until they finish.</p>
+                <label>Type the exact connection name to confirm
+                  <input aria-label={'Confirm provider name ' + provider.name} type="text" autocomplete="off" spellcheck="false" bind:value={providerForgetConfirmation} />
+                </label>
+                <button type="button" class="soft-button small" onclick={() => { providerForgetCandidate = ''; providerForgetConfirmation = ''; }}>Keep saved key</button>
+                <button type="button" class="soft-button small" disabled={!isNative || working || replyBusy || workflowBusy || !!probeBusyId || providerForgetConfirmation !== provider.name} onclick={() => void forgetRememberedProviderKey(provider)}>Delete saved API key</button>
+              </div>
+            {/if}
             {#if result}
               <p class="provider-probe-result" role="status">Text-only test: {result.status === 'compatible_text' ? 'Compatible for this one response' : result.status === 'request_error' ? result.message : result.status.replaceAll('_', ' ')}{#if 'http_status' in result && result.http_status} · HTTP {result.http_status}{/if}. No tool or streaming support was verified.</p>
             {/if}
           {:else}
-            <div class="provider-none">No AI providers are configured yet.</div>
+            <div class="provider-none">{snapshot.providers.length ? 'No providers match these local filters. Clear the search or choose All.' : 'No AI providers are configured yet.'}</div>
           {/each}
         </div>
         <section class="agent-routing" aria-label="Assign models to agents">
@@ -2625,14 +3349,26 @@
 
 {#if dialog}
   <div class="modal-backdrop">
-    <div class="modal" role="dialog" aria-modal="true" aria-label={dialog === 'new-room' ? 'Create room' : dialog === 'new-agent' ? 'Create agent' : dialog === 'new-task' ? 'Plan task' : dialog === 'provider' ? 'Connect AI provider' : 'Command palette'} use:focusDialog>
+    <div class="modal" class:command-dialog={dialog === 'commands'} role="dialog" aria-modal="true" aria-label={dialog === 'new-room' ? 'Create room' : dialog === 'new-agent' ? 'Create agent' : dialog === 'new-task' ? 'Plan task' : dialog === 'provider' ? 'Connect AI provider' : 'Search workspace'} use:focusDialog>
       <div class="modal-heading"><div class="modal-icon">{#if dialog === 'new-room'}<MessageCircle size={21}/>{:else if dialog === 'new-agent'}<Bot size={21}/>{:else if dialog === 'new-task'}<Layers3 size={21}/>{:else if dialog === 'provider'}<Cpu size={21}/>{:else}<Command size={21}/>{/if}</div><button class="icon-button" aria-label="Close dialog" onclick={closeDialog}><X size={20}/></button></div>
       {#if dialog === 'new-room'}<h2>A space for what’s next.</h2><p>Start with a room name. Invite agents when you're ready.</p><form onsubmit={(event) => {event.preventDefault();void createRoom();}}><label>ROOM NAME<input bind:value={newRoom} placeholder="e.g. Research lab, My next product" maxlength="80" required/></label><button class="primary-button full" disabled={working || !newRoom.trim() || !isNative} type="submit">Create room <ArrowRight size={17}/></button></form>
       {:else if dialog === 'new-agent'}<h2>Meet your next teammate.</h2><p>Choose a role and a name. Permissions and model capabilities still determine what an agent can actually do.</p><form onsubmit={(event) => {event.preventDefault();void createAgent(selectedRole,newAgent);}}><label>ROLE<select bind:value={selectedRole}>{#each starterRoles as role}<option value={role.name}>{role.name}</option>{/each}</select></label><label>DISPLAY NAME<input bind:value={newAgent} placeholder="e.g. Avery" maxlength="80"/></label><button class="primary-button full" disabled={working || !isNative} type="submit">Add teammate <ArrowRight size={17}/></button></form>
-      {:else if dialog === 'new-task'}<h2>Plan your next task.</h2><p>Save instructions for a teammate. Text-only model execution is available with an explicitly selected provider; local file actions still require separate native approval.</p><form onsubmit={(event) => {event.preventDefault();void createTask();}}><label>ROOM<select bind:value={taskRoomId} required>{#each snapshot.rooms as r (r.id)}<option value={r.id}>{r.name}</option>{/each}</select></label><label>TEAMMATE<select bind:value={taskAgentId} required>{#each snapshot.agents as agent (agent.id)}<option value={agent.id}>{agent.name} — {agent.role}</option>{/each}</select></label><label>INSTRUCTIONS<textarea bind:value={taskInstructions} rows="4" maxlength="10000" required placeholder="Describe the outcome you want..."></textarea></label><button class="primary-button full" type="submit" disabled={!isNative || working || !taskRoomId || !taskAgentId || !taskInstructions.trim()}>Save pending task <ArrowRight size={17}/></button></form>{#if !snapshot.rooms.length || !snapshot.agents.length}<p class="dialog-footnote">Create a room and add a teammate before saving a task.</p>{/if}
+      {:else if dialog === 'new-task'}<h2>Plan your next task.</h2><p>Save instructions for a teammate. Text-only model execution is available with an explicitly selected provider; local file actions still require separate native approval.</p>
+        {#if !snapshot.rooms.length || !snapshot.agents.length}
+          <div class="task-setup-guide" role="group" aria-label="Complete task prerequisites">
+            <strong>Complete your setup to save this plan</strong>
+            {#if !snapshot.rooms.length}<button type="button" class="soft-button small" onclick={() => continueTaskSetup('new-room')}><Plus size={14}/> Create a room first</button>{/if}
+            {#if !snapshot.agents.length}<button type="button" class="soft-button small" onclick={() => continueTaskSetup('new-agent')}><Plus size={14}/> Add a teammate</button>{/if}
+            <span>Your instructions stay in the form while you complete setup.</span>
+          </div>
+        {/if}
+        <form onsubmit={(event) => {event.preventDefault();void createTask();}}><label>ROOM<select bind:value={taskRoomId} required>{#each snapshot.rooms as r (r.id)}<option value={r.id}>{r.name}</option>{/each}</select></label><label>TEAMMATE<select bind:value={taskAgentId} required>{#each snapshot.agents as agent (agent.id)}<option value={agent.id}>{agent.name} — {agent.role}</option>{/each}</select></label><label>INSTRUCTIONS<textarea bind:value={taskInstructions} rows="4" maxlength="10000" required placeholder="Describe the outcome you want..."></textarea></label><button class="primary-button full" type="submit" disabled={!isNative || working || !taskRoomId || !taskAgentId || !taskInstructions.trim()}>Save pending task <ArrowRight size={17}/></button></form>
       {:else if dialog === 'provider'}
-        <h2>Bring your own model.</h2>
-        <p>Choose the API format this provider actually supports. Saving a connection does not contact the provider or send messages.</p>
+        <h2>{providerRevisionSourceId ? 'Revise a connection.' : 'Bring your own model.'}</h2>
+        <p>{providerRevisionSourceId ? 'Review this saved configuration. Keys are never shown or copied. Unchanged profile details reuse the original connection; changing its name, model, endpoint or API format creates a separate profile and leaves the original intact.' : 'Choose the API format this provider actually supports. Saving a connection does not contact the provider or send messages.'}</p>
+        {#if providerRevisionSourceId}
+          <p class="provider-revision-note" role="note">{providerRevisionSavedKey ? 'This profile has a securely remembered credential. Re-enter a replacement key before saving; leave this dialog to retain the existing credential unchanged.' : 'Enter the API key again if the connection needs one. Saving without a key clears an existing session-only key when all other profile details match.'} No provider request is sent by saving.</p>
+        {/if}
         <form onsubmit={(event) => {event.preventDefault();void saveProvider();}}>
           <label for="provider-kind">API FORMAT
             <select id="provider-kind" value={providerKind} disabled={working} onchange={(event) => chooseProviderKind(event.currentTarget.value as ProviderKind)}>
@@ -2641,7 +3377,7 @@
           </label>
           <p id="provider-kind-help" class="provider-kind-help" aria-live="polite">{providerPreset.detail}</p>
           <label for="provider-name">DISPLAY NAME<input id="provider-name" bind:value={providerName} maxlength="120" autocomplete="off" required /></label>
-          <label for="provider-endpoint">API BASE URL<input id="provider-endpoint" type="url" value={providerEndpoint} oninput={(event) => { providerEndpoint = event.currentTarget.value; providerKey = ''; }} placeholder={providerPreset.endpoint} spellcheck="false" autocapitalize="off" autocomplete="off" required /></label>
+          <label for="provider-endpoint">API BASE URL<input id="provider-endpoint" type="url" value={providerEndpoint} oninput={(event) => { providerEndpoint = event.currentTarget.value; providerKey = ''; providerRememberKey = false; }} placeholder={providerPreset.endpoint} spellcheck="false" autocapitalize="off" autocomplete="off" required /></label>
           <p class="provider-field-hint">The URL is a base URL, not a full request path. Remote connections require HTTPS; HTTP is permitted only for localhost.</p>
           <label for="provider-model">MODEL IDENTIFIER<input id="provider-model" bind:value={providerModel} placeholder={providerPreset.modelHint} spellcheck="false" autocapitalize="off" autocomplete="off" required /></label>
           <label for="provider-key">API KEY {providerKind === 'ollama_native' ? '(USUALLY NOT NEEDED LOCALLY)' : '(IF REQUIRED BY PROVIDER)'}
@@ -2649,10 +3385,12 @@
           </label>
           <label class="provider-remember"><input type="checkbox" bind:checked={providerRememberKey} disabled={!providerKey.trim() || working}/> Remember this API key in the operating system's secure credential manager</label>
           <p class="provider-field-hint">By default, keys are held only in this app session. Opt-in secure storage is available on supported Windows/macOS accounts and may be accessible to other programs running under the same account. Other platforms reject the request without a plaintext fallback. Do not put keys in the URL; switching API formats clears the entered key.</p>
-          <button class="primary-button full" disabled={working || !providerName.trim() || !providerEndpoint.trim() || !providerModel.trim() || !isNative} type="submit">Save connection locally <ArrowRight size={17}/></button>
+          <button class="primary-button full" disabled={working || !providerName.trim() || !providerEndpoint.trim() || !providerModel.trim() || !isNative || (providerRevisionSourceId !== '' && providerRevisionSavedKey && !providerKey.trim())} type="submit">{providerRevisionSourceId ? 'Save revised configuration' : 'Save connection locally'} <ArrowRight size={17}/></button>
         </form>
         <p class="dialog-footnote"><ShieldCheck size={14}/> Provider compatibility is not guaranteed. Only explicit Ask, Run, or Test actions can send model requests; remote services may charge.</p>
-      {:else}<h2>Where would you like to go?</h2><p>Quickly navigate your workspace. <kbd>Esc</kbd> closes this menu.</p><div class="command-list">{#each [{label:'Home',target:'home'},{label:'Rooms',target:'rooms'},{label:'Tasks',target:'tasks'},{label:'Evidence',target:'evidence'},{label:'Role library',target:'library'},{label:'Settings',target:'settings'}] as command}<button onclick={() => navigate(command.target as Screen)}>{command.label}<ArrowRight size={16}/></button>{/each}</div>{/if}
+      {:else}
+        <WorkspaceCommandPalette rooms={snapshot.rooms} onNavigate={navigate} onSelectRoom={openCommandRoom} onAction={openCommandAction}/>
+      {/if}
       {#if !isNative}<p class="dialog-footnote" role="status">This is a browser preview. Changes require the installed desktop app.</p>{/if}
     </div>
   </div>

@@ -17,8 +17,8 @@ use constellation_backup_cli::BackupService;
 use constellation_core::OpenAiCompatibleAdapter;
 use constellation_core::{
     Agent, AgentId, ChatEntry, ChatRole, CredentialSource, MessageId, MessageSender, OperationId,
-    ProviderId, ProviderKind, ProviderProfile, RoomId, StudioSnapshot, StudioStore, Task, TaskId,
-    TaskState, export_room_markdown,
+    ProviderId, ProviderKind, ProviderProfile, RoomDraft, RoomId, StudioSnapshot, StudioStore,
+    Task, TaskId, TaskState, export_room_markdown,
 };
 use constellation_credential_vault::{
     ProviderKey, SERVICE as CREDENTIAL_SERVICE, Vault, VaultError,
@@ -702,22 +702,50 @@ fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+// WebView zoom is a native page-scale preference, not simulated OS DPI.
+fn checked_ui_zoom(percent: u16) -> Result<f64, String> {
+    match percent {
+        100 | 125 | 150 | 175 | 200 => Ok(f64::from(percent) / 100.0),
+        _ => Err("Select a supported WebView zoom level between 100% and 200%.".into()),
+    }
+}
+
+#[tauri::command]
+fn studio_set_ui_zoom(window: tauri::WebviewWindow, percent: u16) -> Result<u16, String> {
+    let scale = checked_ui_zoom(percent)?;
+    window.set_zoom(scale).map_err(err)?;
+    Ok(percent)
+}
+
 fn snapshot_as_view(store: &StudioStore) -> Result<Value, String> {
     let snapshot = store.snapshot().map_err(err)?;
+    Ok(snapshot_to_view(&snapshot))
+}
+
+// A large room can have thousands of messages and hundreds of agents.
+// Construct sender identities once rather than scanning every agent for each
+// message. Do not rewrite historical agent IDs or imply a missing sender is
+// still configured: old messages retain the existing "Agent" fallback.
+fn snapshot_to_view(snapshot: &StudioSnapshot) -> Value {
+    let agent_names = snapshot
+        .agents
+        .iter()
+        .map(|agent| (agent.id, agent.name.as_str()))
+        .collect::<HashMap<_, _>>();
     let agents = snapshot
         .agents
         .iter()
         .map(|agent| {
             json!({
                 "id":agent.id, "name":agent.name, "role":agent.role,
-                "provider_id":agent.provider_id
+                "provider_id":agent.provider_id, "created_at_ms":agent.created_at_ms
             })
         })
         .collect::<Vec<_>>();
     let rooms = snapshot
         .rooms
         .iter()
-        .map(|room| json!({"id":room.id, "name":room.title, "description":"", "member_ids":[]}))
+        .map(|room| json!({"id":room.id, "name":room.title, "description":"", "member_ids":room.member_ids.clone().unwrap_or_default(), "members_configured":room.member_ids.is_some()}))
         .collect::<Vec<_>>();
     let messages = snapshot
         .messages
@@ -728,11 +756,7 @@ fn snapshot_as_view(store: &StudioStore) -> Result<Value, String> {
                 MessageSender::System => ("system", "System".to_string()),
                 MessageSender::Agent(id) => (
                     "agent",
-                    snapshot
-                        .agents
-                        .iter()
-                        .find(|a| a.id == id)
-                        .map_or_else(|| "Agent".to_string(), |a| a.name.clone()),
+                    agent_names.get(&id).copied().unwrap_or("Agent").to_string(),
                 ),
             };
             json!({
@@ -765,14 +789,31 @@ fn snapshot_as_view(store: &StudioStore) -> Result<Value, String> {
             })
         })
         .collect::<Vec<_>>();
-    Ok(
-        json!({"rooms": rooms, "agents":agents, "messages":messages, "providers":providers, "tasks":tasks}),
-    )
+    json!({"rooms": rooms, "agents":agents, "messages":messages, "providers":providers, "tasks":tasks})
 }
 
 #[tauri::command]
 fn studio_bootstrap(state: State<'_, StudioState>) -> Result<Value, String> {
     snapshot_as_view(&state.store)
+}
+
+#[tauri::command]
+fn studio_list_room_drafts(state: State<'_, StudioState>) -> Result<Vec<RoomDraft>, String> {
+    state.store.room_drafts().map_err(err)
+}
+
+#[tauri::command]
+fn studio_save_room_draft(
+    state: State<'_, StudioState>,
+    room_id: String,
+    content: String,
+    expected_revision: i64,
+) -> Result<RoomDraft, String> {
+    let room_id: RoomId = room_id.parse().map_err(|_| "Invalid room ID")?;
+    state
+        .store
+        .save_room_draft(room_id, content, expected_revision)
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -963,8 +1004,9 @@ fn studio_delete_saved_evidence(
 fn studio_search_saved_evidence(
     state: State<'_, StudioState>,
     query: String,
+    offset: Option<usize>,
 ) -> Result<Value, String> {
-    evidence_library::search(&state.database_path, &query)
+    evidence_library::search(&state.database_path, &query, offset.unwrap_or(0))
 }
 
 #[tauri::command]
@@ -1064,15 +1106,50 @@ fn studio_create_workflow(
     state: State<'_, StudioState>,
     definition_json: String,
 ) -> Result<Value, String> {
+    // The local provider cleanup flow must not interleave workflow creation
+    // between its reference audit and the provider-table mutation.
+    let _task_gate = state
+        .task_tool_boundary
+        .lock()
+        .map_err(|_| "Task authorization lock is unavailable")?;
     create_workflow_plan(&state.store, &state.workflows, &definition_json)
 }
 
 #[tauri::command]
-fn studio_list_workflows(state: State<'_, StudioState>) -> Result<Value, String> {
-    let records = state
-        .workflows
-        .list(100, 0)
+fn studio_list_workflows(
+    state: State<'_, StudioState>,
+    offset: Option<usize>,
+    query: Option<String>,
+) -> Result<Value, String> {
+    list_workflow_page(
+        &state.workflows,
+        offset.unwrap_or(0),
+        query.as_deref().unwrap_or(""),
+    )
+}
+
+/// Bounded native pages backed by stable workflow-ID order. Fetching the
+/// 26th record distinguishes an exact full page from a page with successors.
+/// This lists only local committed data; it cannot invoke any provider.
+fn list_workflow_page(
+    workflows: &WorkflowRepository,
+    offset: usize,
+    query: &str,
+) -> Result<Value, String> {
+    const PAGE_SIZE: usize = 25;
+    const MAX_OFFSET: usize = 100_000;
+    if offset > MAX_OFFSET
+        || !offset.is_multiple_of(PAGE_SIZE)
+        || query.len() > 128
+        || query.chars().any(char::is_control)
+    {
+        return Err("Invalid saved workflow page".into());
+    }
+    let mut records = workflows
+        .list_matching_ids(query, PAGE_SIZE + 1, offset)
         .map_err(|_| "Could not read the locally saved workflows")?;
+    let has_more = records.len() > PAGE_SIZE;
+    records.truncate(PAGE_SIZE);
     Ok(json!({
         "items":records.iter().map(|record| json!({
             "definition":record.run.definition(),
@@ -1081,8 +1158,10 @@ fn studio_list_workflows(state: State<'_, StudioState>) -> Result<Value, String>
             "revision":record.revision,
             "cancelled":record.run.cancelled(),
         })).collect::<Vec<_>>(),
-        "max_items":100,
-        "has_more":records.len() == 100,
+        "max_items":PAGE_SIZE,
+        "offset":offset,
+        "query":query,
+        "has_more":has_more,
     }))
 }
 
@@ -1829,6 +1908,34 @@ fn restore_encrypted_backup(
 }
 
 #[tauri::command]
+fn studio_set_room_members(
+    state: State<'_, StudioState>,
+    room_id: String,
+    member_ids: Vec<String>,
+    expected_member_ids: Option<Vec<String>>,
+) -> Result<Value, String> {
+    let room_id: RoomId = room_id.parse().map_err(|_| "Invalid room ID")?;
+    let member_ids: Vec<AgentId> = member_ids
+        .into_iter()
+        .map(|id| id.parse().map_err(|_| "Invalid agent ID".into()))
+        .collect::<Result<_, String>>()?;
+    let expected: Option<Vec<AgentId>> = expected_member_ids
+        .map(|ids| {
+            ids.into_iter()
+                .map(|id| id.parse().map_err(|_| "Invalid agent ID".into()))
+                .collect::<Result<Vec<_>, String>>()
+        })
+        .transpose()?;
+    let updated = state
+        .store
+        .set_room_members(room_id, member_ids, expected, OperationId::new())
+        .map_err(err)?;
+    Ok(
+        json!({"id":updated.id, "member_ids":updated.member_ids.unwrap_or_default(), "members_configured":true}),
+    )
+}
+
+#[tauri::command]
 fn studio_create_room(
     state: State<'_, StudioState>,
     title: String,
@@ -1845,7 +1952,9 @@ fn studio_create_room(
         _ => return Err("Both roomId and operationId are required for a retryable command".into()),
     }
     .map_err(err)?;
-    Ok(json!({"id":room.id,"name":room.title,"description":"","member_ids":[]}))
+    Ok(
+        json!({"id":room.id,"name":room.title,"description":"","member_ids":[],"members_configured":false}),
+    )
 }
 
 /// Identical provider profiles reuse one ID and the attached session credential.
@@ -2016,6 +2125,52 @@ fn studio_add_agent(
     Ok(json!({"id":agent.id,"name":agent.name,"role":agent.role,"provider_id":agent.provider_id}))
 }
 
+/// Only never-used workers may leave the roster. The immutable core event
+/// retains the removed identity; referenced tasks/messages/teams are refused.
+#[tauri::command]
+fn studio_remove_unused_agent(
+    state: State<'_, StudioState>,
+    agent_id: String,
+    expected_name: String,
+    expected_role: String,
+    expected_provider_id: Option<String>,
+    expected_created_at_ms: i64,
+) -> Result<(), String> {
+    let expected = Agent {
+        id: agent_id.parse().map_err(|_| "Invalid worker ID")?,
+        name: expected_name,
+        role: expected_role,
+        provider_id: expected_provider_id
+            .map(|id| id.parse().map_err(|_| "Invalid worker provider ID"))
+            .transpose()?,
+        created_at_ms: expected_created_at_ms,
+    };
+    let _task_gate = state
+        .task_tool_boundary
+        .lock()
+        .map_err(|_| "Task authorization lock unavailable")?;
+    if !state
+        .generating_rooms
+        .lock()
+        .map_err(|_| "Active reply status unavailable")?
+        .is_empty()
+    {
+        return Err("Wait for active replies to finish before removing a worker".into());
+    }
+    if !state
+        .workflows
+        .list(1, 0)
+        .map_err(|_| "Workflow history check failed; worker removal denied")?
+        .is_empty()
+    {
+        return Err("Saved workflows exist; worker removal denied to retain attribution".into());
+    }
+    state
+        .store
+        .remove_unused_agent(expected, OperationId::new())
+        .map_err(err)
+}
+
 /// A saved preference, not a tool grant and never an automatic network send.
 /// Provider identity must exist at assignment time; an omitted ID clears it.
 #[tauri::command]
@@ -2069,6 +2224,37 @@ fn studio_send_message(
     Ok(())
 }
 
+/// Persist the exact saved human draft and its local message atomically.
+/// This command does not invoke a model or grant any tool permission.
+#[tauri::command]
+fn studio_send_saved_draft(
+    state: State<'_, StudioState>,
+    room_id: String,
+    content: String,
+    message_id: String,
+    operation_id: String,
+    expected_draft_revision: i64,
+) -> Result<(), String> {
+    let room_id: RoomId = room_id.parse().map_err(err)?;
+    let message_id: MessageId = message_id.parse().map_err(err)?;
+    let operation_id: OperationId = operation_id.parse().map_err(err)?;
+    let _writer = state
+        .message_write_lock
+        .lock()
+        .map_err(|_| "message lock poisoned")?;
+    state
+        .store
+        .append_user_message_and_clear_draft(
+            message_id,
+            room_id,
+            content,
+            expected_draft_revision,
+            operation_id,
+        )
+        .map_err(err)?;
+    Ok(())
+}
+
 #[tauri::command]
 fn studio_save_provider(
     state: State<'_, StudioState>,
@@ -2099,6 +2285,135 @@ fn studio_save_provider(
             remember_key: remember_key.unwrap_or(false),
         },
     )?;
+    Ok(())
+}
+
+/// Deliberately narrow cleanup of unused, credential-free profiles. A saved
+/// model route can be an authenticated historical identity: never delete one
+/// when agents, workflows, tasks or messages might depend on it. Removing an
+/// OS-vault credential requires a distinct independently reviewed operation.
+#[tauri::command]
+fn studio_remove_unused_provider(
+    state: State<'_, StudioState>,
+    provider_id: String,
+    expected_name: String,
+    expected_endpoint: String,
+    expected_model: String,
+    expected_kind: ProviderKind,
+) -> Result<(), String> {
+    let provider_id: ProviderId = provider_id.parse().map_err(|_| "Invalid provider ID")?;
+    let expected = ProviderProfile {
+        id: provider_id,
+        display_name: expected_name,
+        base_url: expected_endpoint,
+        model_id: expected_model,
+        kind: expected_kind,
+        credentials: CredentialSource::None,
+    };
+    let _task_gate = state
+        .task_tool_boundary
+        .lock()
+        .map_err(|_| "Task authorization lock is unavailable")?;
+    if !state
+        .workflows
+        .list(1, 0)
+        .map_err(|_| "Could not verify workflow history; removal denied")?
+        .is_empty()
+    {
+        return Err("Saved workflows exist; retain this provider for provenance".into());
+    }
+    if !state
+        .generating_rooms
+        .lock()
+        .map_err(|_| "Active response status is unavailable")?
+        .is_empty()
+    {
+        return Err("Wait for active replies to finish before removing connections".into());
+    }
+    let mut keys = state
+        .session_keys
+        .lock()
+        .map_err(|_| "credential lock poisoned")?;
+    state
+        .store
+        .remove_unused_provider(expected, OperationId::new())
+        .map_err(err)?;
+    keys.remove(&provider_id);
+    Ok(())
+}
+
+/// Explicitly forget a remembered OS key while retaining provider identity,
+/// agent assignments, saved messages and immutable workflow provenance. This
+/// operation does not contact the model or execute any pending task.
+#[tauri::command]
+fn studio_forget_remembered_provider_key(
+    state: State<'_, StudioState>,
+    provider_id: String,
+    expected_name: String,
+    expected_endpoint: String,
+    expected_model: String,
+    expected_kind: ProviderKind,
+    confirmed_name: String,
+) -> Result<(), String> {
+    let provider_id: ProviderId = provider_id.parse().map_err(|_| "Invalid provider ID")?;
+    if expected_name != confirmed_name {
+        return Err(
+            "Confirm the exact provider name before forgetting its saved credential".into(),
+        );
+    }
+    let expected = ProviderProfile {
+        id: provider_id,
+        display_name: expected_name,
+        base_url: expected_endpoint,
+        model_id: expected_model,
+        kind: expected_kind,
+        credentials: CredentialSource::OsKeyring {
+            service: CREDENTIAL_SERVICE.into(),
+            account: provider_id.to_string(),
+        },
+    };
+    expected.validate().map_err(err)?;
+    let _task_gate = state
+        .task_tool_boundary
+        .lock()
+        .map_err(|_| "Task authorization lock is unavailable")?;
+    if !state
+        .generating_rooms
+        .lock()
+        .map_err(|_| "Active response status is unavailable")?
+        .is_empty()
+    {
+        return Err("Wait for active responses to finish before forgetting this credential".into());
+    }
+    // A stale renderer may not delete another profile's credential. Compare
+    // the complete native record before opening OS credential storage.
+    let current = state
+        .store
+        .snapshot()
+        .map_err(err)?
+        .providers
+        .into_iter()
+        .find(|profile| profile.id == provider_id)
+        .ok_or("Provider not configured")?;
+    if current != expected {
+        return Err("Provider changed or no longer has the expected remembered key".into());
+    }
+    let vault_key = ProviderKey::new(provider_id.0).map_err(|_| "Invalid provider ID")?;
+    // Missing is safe: a prior interrupted attempt may have deleted the key
+    // before its profile transaction committed. All other errors fail closed.
+    match Vault.delete(vault_key) {
+        Ok(()) | Err(VaultError::NotFound) => {}
+        Err(_) => {
+            return Err("Could not remove saved API key from the OS credential manager".into());
+        }
+    }
+    state.store.forget_remembered_provider_credential(expected, OperationId::new())
+        .map_err(|_| "The key was removed, but the provider profile changed or could not be updated. Restart settings before using this connection".to_string())?;
+    state
+        .session_keys
+        .lock()
+        .map_err(|_| "credential lock poisoned")?
+        .remove(&provider_id);
     Ok(())
 }
 
@@ -4305,6 +4620,9 @@ pub fn run() {
             studio_reject_local_file_operation,
             studio_approve_local_file_operation,
             studio_bootstrap,
+            studio_set_ui_zoom,
+            studio_list_room_drafts,
+            studio_save_room_draft,
             studio_export_room_markdown,
             studio_search_evidence,
             studio_extract_local_document,
@@ -4327,10 +4645,15 @@ pub fn run() {
             studio_create_project_archive,
             studio_restore_project_archive,
             studio_create_room,
+            studio_set_room_members,
             studio_add_agent,
+            studio_remove_unused_agent,
             studio_set_agent_provider,
             studio_send_message,
+            studio_send_saved_draft,
             studio_save_provider,
+            studio_remove_unused_provider,
+            studio_forget_remembered_provider_key,
             studio_probe_provider,
             studio_generate_reply,
             studio_generate_team_replies,
@@ -4354,6 +4677,150 @@ mod tests {
     use super::*;
     use constellation_core::MessageSender;
     use sha2::Digest;
+
+    #[test]
+    fn sqlite_snapshot_with_ten_thousand_messages_and_tasks_keeps_all_rows() {
+        // Bulk-insert synthetic *test-only* rows in one transaction to exercise
+        // the same production snapshot read/projection path without 20,000
+        // per-operation fsyncs or simulated provider/tool authorizations.
+        let (dir, store) = store();
+        let room = store.create_room("Large offline history").unwrap();
+        let agent = store.add_agent("Synthetic", "Offline reviewer").unwrap();
+        let mut connection = Connection::open(dir.path().join("studio.sqlite")).unwrap();
+        let tx = connection.transaction().unwrap();
+        for index in 0..10_000 {
+            let message = constellation_core::Message {
+                id: MessageId::new(),
+                room_id: room.id,
+                sender: MessageSender::Agent(agent.id),
+                content: format!("Offline history entry {index}"),
+                created_at_ms: index,
+            };
+            tx.execute(
+                "INSERT INTO messages (id, room_id, data) VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    message.id.to_string(),
+                    room.id.to_string(),
+                    serde_json::to_string(&message).unwrap()
+                ],
+            )
+            .unwrap();
+            let task = Task {
+                id: TaskId::new(),
+                room_id: room.id,
+                agent_id: agent.id,
+                instructions: format!("Local pending task {index}"),
+                state: TaskState::Pending,
+                failure_reason: None,
+                created_at_ms: index,
+                updated_at_ms: index,
+            };
+            tx.execute(
+                "INSERT INTO tasks (id, room_id, agent_id, data) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![
+                    task.id.to_string(),
+                    room.id.to_string(),
+                    agent.id.to_string(),
+                    serde_json::to_string(&task).unwrap()
+                ],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        drop(connection);
+        let started = std::time::Instant::now();
+        let view = snapshot_as_view(&store).unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(view["messages"].as_array().unwrap().len(), 10_000);
+        assert_eq!(view["tasks"].as_array().unwrap().len(), 10_000);
+        for index in [0, 99, 100, 5_000, 9_999] {
+            assert_eq!(
+                view["messages"][index]["body"],
+                format!("Offline history entry {index}")
+            );
+            assert_eq!(view["messages"][index]["sender_name"], "Offline reviewer");
+            assert_eq!(
+                view["tasks"][index]["instructions"],
+                format!("Local pending task {index}")
+            );
+        }
+        eprintln!(
+            "synthetic SQLite snapshot: 10,000 messages + 10,000 tasks projected in {:.3}s (not a performance SLA)",
+            elapsed.as_secs_f64()
+        );
+        // Reopen the exact database and verify the synthetic local rows still
+        // load. This is not evidence of normal audited write operations.
+        drop(store);
+        let reopened = StudioStore::open(dir.path().join("studio.sqlite")).unwrap();
+        assert_eq!(reopened.snapshot().unwrap().messages.len(), 10_000);
+        assert_eq!(reopened.snapshot().unwrap().tasks.len(), 10_000);
+    }
+
+    #[test]
+    fn large_snapshot_preserves_ten_thousand_ordered_messages_and_sender_identity() {
+        let room = RoomId::new();
+        let agents = (0..200)
+            .map(|index| Agent {
+                id: AgentId::new(),
+                name: format!("Team member {index}"),
+                role: "Researcher".into(),
+                provider_id: None,
+                created_at_ms: index,
+            })
+            .collect::<Vec<_>>();
+        let messages = (0..10_000)
+            .map(|index| constellation_core::Message {
+                id: MessageId::new(),
+                room_id: room,
+                sender: MessageSender::Agent(agents[index % agents.len()].id),
+                content: format!("Local message {index}; no provider request"),
+                created_at_ms: index as i64,
+            })
+            .collect::<Vec<_>>();
+        let snapshot = StudioSnapshot {
+            agents,
+            messages,
+            ..StudioSnapshot::default()
+        };
+        let view = snapshot_to_view(&snapshot);
+        let rendered = view["messages"].as_array().unwrap();
+        assert_eq!(rendered.len(), 10_000);
+        for index in [0, 1, 199, 200, 9_999] {
+            assert_eq!(rendered[index]["id"], json!(snapshot.messages[index].id));
+            assert_eq!(rendered[index]["body"], snapshot.messages[index].content);
+            assert_eq!(
+                rendered[index]["sender_name"],
+                snapshot.agents[index % snapshot.agents.len()].name
+            );
+        }
+        assert_eq!(view["agents"].as_array().unwrap().len(), 200);
+        assert_eq!(view["tasks"].as_array().unwrap().len(), 0);
+
+        // Historical references to removed agents must not fabricate their
+        // former identity, or prevent the timeline from being rendered.
+        let missing_sender = constellation_core::Message {
+            id: MessageId::new(),
+            room_id: room,
+            sender: MessageSender::Agent(AgentId::new()),
+            content: "orphaned historical sender".into(),
+            created_at_ms: 10_000,
+        };
+        let missing = snapshot_to_view(&StudioSnapshot {
+            messages: vec![missing_sender],
+            ..StudioSnapshot::default()
+        });
+        assert_eq!(missing["messages"][0]["sender_name"], "Agent");
+    }
+
+    #[test]
+    fn native_webview_zoom_accepts_only_documented_local_presets() {
+        for (percent, scale) in [(100, 1.0), (125, 1.25), (150, 1.5), (175, 1.75), (200, 2.0)] {
+            assert_eq!(checked_ui_zoom(percent).unwrap(), scale);
+        }
+        for invalid in [0, 1, 50, 99, 101, 201, u16::MAX] {
+            assert!(checked_ui_zoom(invalid).is_err());
+        }
+    }
 
     #[test]
     fn native_review_cleanup_is_based_on_real_pending_status_after_denial_or_error() {
@@ -5197,6 +5664,76 @@ mod tests {
                 .ready_steps()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn saved_workflow_pages_are_bounded_distinct_and_complete() {
+        let (dir, store) = store();
+        let repo = WorkflowRepository::open(dir.path().join("workflow-pages.sqlite3")).unwrap();
+        let agent = store.add_agent("Researcher", "Reader").unwrap();
+        let provider = ProviderId::new();
+        store
+            .save_provider_profile(ProviderProfile {
+                id: provider,
+                display_name: "Local test provider".into(),
+                model_id: "fixture".into(),
+                base_url: "http://127.0.0.1:11434/v1".into(),
+                kind: ProviderKind::OpenaiChat,
+                credentials: CredentialSource::None,
+            })
+            .unwrap();
+        for i in 0..51 {
+            let definition = json!({
+                "schema_version":1, "workflow_id":format!("workflow-{i:03}"),
+                "steps":[{
+                    "id":"research", "role":"Researcher",
+                    "agent_id":agent.id.to_string(), "provider_id":provider.to_string(),
+                    "instruction":"Local no-network planning", "depends_on":[], "max_attempts":2
+                }]
+            });
+            create_workflow_plan(&store, &repo, &definition.to_string()).unwrap();
+        }
+        let mut ids = Vec::new();
+        for (offset, expected_len, has_more) in [(0, 25, true), (25, 25, true), (50, 1, false)] {
+            let page = list_workflow_page(&repo, offset, "").unwrap();
+            assert_eq!(page["offset"], offset);
+            assert_eq!(page["max_items"], 25);
+            assert_eq!(page["has_more"], has_more);
+            let rows = page["items"].as_array().unwrap();
+            assert_eq!(rows.len(), expected_len);
+            for row in rows {
+                ids.push(
+                    row["definition"]["workflow_id"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                );
+            }
+        }
+        assert_eq!(ids.len(), 51);
+        assert_eq!(ids.first().unwrap(), "workflow-000");
+        assert_eq!(ids.last().unwrap(), "workflow-050");
+        assert_eq!(
+            list_workflow_page(&repo, 75, "").unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(list_workflow_page(&repo, 1, "").is_err());
+        assert!(list_workflow_page(&repo, 100_025, "").is_err());
+        let search = list_workflow_page(&repo, 0, "WORKFLOW-04").unwrap();
+        assert_eq!(search["items"].as_array().unwrap().len(), 10);
+        assert_eq!(search["has_more"], false);
+        assert_eq!(search["query"], "WORKFLOW-04");
+        assert_eq!(
+            list_workflow_page(&repo, 0, "%").unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert!(list_workflow_page(&repo, 0, "\n").is_err());
     }
 
     #[test]

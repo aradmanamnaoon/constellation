@@ -78,7 +78,16 @@ require_linux_cache() {
 
 if [[ "$mode" == crates ]]; then
   require_linux_cache
-  node --test tests/*.test.mjs
+  # On some Ubuntu environments Node 22 advertises TS stripping, but was
+  # compiled without the optional TS parser (ERR_NO_TYPESCRIPT). Keep the
+  # offline source tests reproducible without changing the system Node or
+  # downloading an executable. Node 24+ uses its built-in TS support.
+  node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
+  if (( node_major < 24 )); then
+    node --import ./scripts/qa/register-local-node-ts-loader.mjs --test tests/*.test.mjs
+  else
+    node --test tests/*.test.mjs
+  fi
   for manifest in crates/*/Cargo.toml; do
     disk_guard
     echo "Checking $manifest"

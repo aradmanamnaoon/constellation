@@ -63,6 +63,11 @@ pub struct Room {
     pub id: RoomId,
     pub title: String,
     pub created_at_ms: i64,
+    /// None means the room predates persisted team selection; Some([]) is an
+    /// explicit choice to have no team members. This is routing preference,
+    /// never an authorization or file-tool permission grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_ids: Option<Vec<AgentId>>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -131,7 +136,14 @@ pub enum EventKind {
     RoomCreated {
         room_id: RoomId,
     },
+    RoomMembersChanged {
+        room_id: RoomId,
+        member_ids: Vec<AgentId>,
+    },
     AgentAdded {
+        agent_id: AgentId,
+    },
+    AgentRemoved {
         agent_id: AgentId,
     },
     AgentProviderChanged {
@@ -143,6 +155,9 @@ pub enum EventKind {
         room_id: RoomId,
     },
     ProviderSaved {
+        provider_id: ProviderId,
+    },
+    ProviderRemoved {
         provider_id: ProviderId,
     },
     TaskCreated {

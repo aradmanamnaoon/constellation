@@ -17,6 +17,7 @@ param(
   [switch]$SkipBackup,
   [switch]$TestProjectArchive,
   [switch]$TestWorkflows,
+  [switch]$TestDrafts,
   [switch]$TestWorkflowStep,
   [switch]$TestWorkflowReport,
   [switch]$TestFileTools,
@@ -117,6 +118,7 @@ if (-not $HiddenDesktopWorkerName) {
   $workerParams = @{
     ScriptPath = $PSCommandPath; ExePath = $exe; TimeoutSeconds = $TimeoutSeconds
     SkipBackup = $SkipBackup; TestProjectArchive = $TestProjectArchive; TestWorkflows = $TestWorkflows; TestWorkflowStep = $TestWorkflowStep
+    TestDrafts = $TestDrafts
     TestWorkflowReport = $TestWorkflowReport; TestFileTools = $TestFileTools
     TestNativeConsent = $TestNativeConsent; ExpectedExeSha256 = $ExpectedExeSha256
     ExpectedNativeSourceSha256 = $ExpectedNativeSourceSha256
@@ -131,7 +133,11 @@ if (-not $HiddenDesktopWorkerName) {
 Assert-ConstellationHiddenDesktop $HiddenDesktopWorkerName
 
 $runId = [Guid]::NewGuid().ToString('N')
-$sandbox = Join-Path ([IO.Path]::GetTempPath()) "constellation-ui-e2e-$runId"
+# Deliberate two-launch QA uses the native-only, exact app-owned resume
+# identity. Other acceptance sessions keep their old one-launch sandbox.
+$sandboxRoot = if ($TestDrafts) { Join-Path $env:LOCALAPPDATA 'Temp' } else { [IO.Path]::GetTempPath() }
+$sandboxName = if ($TestDrafts) { "constellation-model-qa-$runId" } else { "constellation-ui-e2e-$runId" }
+$sandbox = Join-Path $sandboxRoot $sandboxName
 $isolatedData = Join-Path $sandbox 'Data'
 $artifacts = if ($OutputDirectory) {
   $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
@@ -612,6 +618,7 @@ $result = [ordered]@{
   project_archive_file = $null
   project_recovered_directory = $null
   workflow_status = if ($TestWorkflows) { 'not_run' } else { 'skipped_by_request' }
+  draft_status = if ($TestDrafts) { 'not_run' } else { 'skipped_by_request' }
   workflow_discovery = @()
   workflow_after_action_discovery = @()
   workflow_plan_id = $null
@@ -771,9 +778,20 @@ try {
         throw "Expected one source-hash disclosure; found $($shaDisclosures.Count)."
       }
       Ui-Invoke $shaDisclosures[0]
-      $names = @((Ui-Records $root) | ForEach-Object { $_.Name } | Where-Object { $_ })
-      $shaLabel = @($names | Where-Object { $_ -match '^Source SHA-256:\s*[0-9a-fA-F]{64}$' } | Select-Object -First 1)
-      if (-not $shaLabel.Count) { throw 'Evidence SHA-256 label missing from UIA tree.' }
+      $shaLabel = @()
+      $shaUntil = [DateTime]::UtcNow.AddSeconds(6)
+      do {
+        $shaRecords = @(Ui-Records $root)
+        $names = @($shaRecords | ForEach-Object { $_.Name } | Where-Object { $_ })
+        $shaLabel = @($names | Where-Object { $_ -match '^Source SHA-256:\s*[0-9a-fA-F]{64}$' } | Select-Object -First 1)
+        if ($shaLabel.Count) { break }
+        Start-Sleep -Milliseconds 180
+      } while ([DateTime]::UtcNow -lt $shaUntil)
+      if (-not $shaLabel.Count) {
+        $result.evidence_hash_uia_samples = @($shaRecords | Where-Object { $_.Name -match '(?i)source|sha-256|verification' } |
+          Select-Object -First 16 | ForEach-Object { $_.Type + ': ' + $_.Name })
+        throw 'Evidence SHA-256 label missing from UIA tree after expanding its real disclosure.'
+      }
       $seenSha = ($shaLabel[0] -replace '^Source SHA-256:\s*', '').ToLowerInvariant()
       $result.observed_source_sha256 = $seenSha
       if ($seenSha -cne $sourceSha) { throw 'Displayed SHA256 does not equal fixture SHA256.' }
@@ -1023,6 +1041,24 @@ try {
       $idRecord = @($workflowRecords | Where-Object { $_.Name -match '^workflow-[0-9a-f]{8}-' } | Select-Object -First 1)
       if (-not $idRecord.Count) { throw 'Saved workflow ID not discoverable in UIA list.' }
       $result.workflow_plan_id = $idRecord[0].Name
+      # Verify the real native search control, not merely a source contract.
+      # It must locate the durable workflow by ID, produce a real no-match
+      # state, and recover after clearing the filter. No provider is called.
+      $findWorkflow = Ui-Wait $root 'Find workflow ID' 'workflow-id-search' 8
+      if ($null -eq $findWorkflow) { throw 'Native workflow history ID search control missing.' }
+      Ui-SetText $root $findWorkflow 'qa-unmatched-workflow-20261102'
+      Ui-Invoke (Ui-WaitEnabled $root 'Search' 8)
+      if ($null -eq (Ui-Wait $root 'No saved workflows match that ID search.' '' 8)) {
+        throw 'Native workflow search did not expose a real no-match state.'
+      }
+      Ui-Invoke (Ui-WaitEnabled $root 'Clear filter' 8)
+      $findWorkflow = Ui-Wait $root 'Find workflow ID' 'workflow-id-search' 8
+      if ($null -eq $findWorkflow) { throw 'Workflow search input did not survive clearing the filter.' }
+      Ui-SetText $root $findWorkflow $result.workflow_plan_id
+      Ui-Invoke (Ui-WaitEnabled $root 'Search' 8)
+      if ($null -eq (Ui-Wait $root $result.workflow_plan_id '' 8)) {
+        throw 'Native workflow search failed to rediscover the saved workflow by ID.'
+      }
       try { $result.screenshots += Capture-Window $hwnd 'workflow-saved' }
       catch { $result.blockers += "Workflow saved screenshot: $($_.Exception.Message)" }
       # Re-enter Tasks > Workflows to force a native list reload, not merely
@@ -1634,6 +1670,93 @@ try {
       catch { $result.blockers += "File tools screenshot: $($_.Exception.Message)" }
     }
   }
+  if ($TestDrafts) {
+    try {
+      if ($TestWorkflows -or $TestFileTools) {
+        throw 'Draft restart QA requires its own isolated run without other room creation workflows.'
+      }
+      Ui-Invoke (Ui-Require $root 'Rooms' '')
+      $newRoomButton = Ui-Wait $root 'Create your first room' '' 5
+      if ($null -eq $newRoomButton) { $newRoomButton = Ui-Wait $root 'Create room' '' 5 }
+      if ($null -eq $newRoomButton) { throw 'Draft QA cannot locate native create-room action.' }
+      Ui-Invoke $newRoomButton
+      $roomName = Ui-RequireUniqueEdit $root 'ROOM NAME'
+      Ui-SetText $root $roomName 'Private restart draft QA'
+      Ui-InvokeModalCreateRoom $root
+      $composer = Ui-Wait $root 'Write a local message' '' 8
+      if ($null -eq $composer) { throw 'Native room composer not discoverable after room creation.' }
+      $text = "Private unsent text $runId" # Synthetic only; never a provider credential.
+      Ui-SetText $root $composer $text
+      $until = [DateTime]::UtcNow.AddSeconds(8)
+      do {
+        if (@((Ui-Records $root) | Where-Object { $_.Name -ceq 'Draft saved locally in this project' }).Count -gt 0) { break }
+        Start-Sleep -Milliseconds 200
+      } while ([DateTime]::UtcNow -lt $until)
+      if ([DateTime]::UtcNow -ge $until) { throw 'Native UI never confirmed draft persisted; refusing restart PASS.' }
+      $marker = Join-Path $isolatedData '.constellation-owned-qa-v1'
+      if (-not (Test-Path -LiteralPath $marker -PathType Leaf) -or
+          -not (Test-Path -LiteralPath (Join-Path $isolatedData 'constellation.sqlite3') -PathType Leaf) -or
+          -not (Test-Path -LiteralPath (Join-Path $isolatedData 'constellation-workflows.sqlite3') -PathType Leaf)) {
+        throw 'Private restart identity or its two SQLite databases are missing; refusing resume.'
+      }
+      # Close exactly the process launched in this sandbox, never the user's app.
+      [void]$process.CloseMainWindow()
+      if (-not $process.WaitForExit(2500)) {
+        # WebView2 can refuse CloseMainWindow on a private Win32 desktop.
+        # The draft was already confirmed durable. Kill only this exact
+        # disposable PID, making the next launch a useful crash-recovery test.
+        $process.Kill()
+        if (-not $process.WaitForExit(5000)) { throw 'Isolated draft process did not exit after targeted stop.' }
+      }
+      $process.Dispose()
+      $process = New-Object Diagnostics.Process
+      $psi.Arguments = '--resume-isolated-data-dir "' + $isolatedData + '"'
+      $process.StartInfo = $psi
+      Assert-ConstellationHiddenDesktop $HiddenDesktopWorkerName
+      if (-not $process.Start()) { throw 'Native draft QA restart failed.' }
+      $result.pid_after_draft_restart = $process.Id
+      $root = $null
+      $hwnd = [IntPtr]::Zero
+      $until = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+      do {
+        $process.Refresh()
+        if ($process.HasExited) { throw 'Native app crashed during persisted draft reopen.' }
+        $hwnd = [ConstellationEvidenceWindow]::FindOwnMainWindow($process.Id)
+        if ($hwnd -ne [IntPtr]::Zero) {
+          Assert-ConstellationHiddenWindow $hwnd $HiddenDesktopWorkerName
+          $root = [Windows.Automation.AutomationElement]::FromHandle($hwnd)
+          $fresh = Ui-Find $root 'Write a local message' ''
+          if ($null -ne $fresh) {
+            $valueObject = $null
+            if ($fresh.Element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$valueObject)) {
+              $observed = [string]([Windows.Automation.ValuePattern]$valueObject).Current.Value
+              if ($observed -ceq $text) { break }
+            }
+          }
+        }
+        Start-Sleep -Milliseconds 220
+      } while ([DateTime]::UtcNow -lt $until)
+      if ($observed -cne $text) { throw 'Reopened native composer did not recover exact unsent draft text.' }
+      $result.screenshots += Capture-Window $hwnd 'draft-recovered-after-restart'
+      # This is a local-save-only button. It must never issue a provider call.
+      Ui-Invoke (Ui-WaitEnabled $root 'Save message locally' 8)
+      if ($null -eq (Ui-Wait $root '1 messages' '' 8)) {
+        throw 'Locally sent draft did not appear as exactly one saved room message.'
+      }
+      $clearedComposer = Ui-Wait $root 'Write a local message' '' 8
+      $clearedPattern = $null
+      if ($null -eq $clearedComposer -or
+          -not $clearedComposer.Element.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$clearedPattern) -or
+          [string]([Windows.Automation.ValuePattern]$clearedPattern).Current.Value -cne '') {
+        throw 'After saving the recovered message, its composer must visibly clear without making any provider request.'
+      }
+      $result.screenshots += Capture-Window $hwnd 'draft-locally-sent-compact-room'
+      $result.draft_status = 'pass_native_unsent_draft_recovered_exact_after_restart_and_locally_sent'
+    } catch {
+      $result.draft_status = 'blocked_or_failed_private_native_draft_reopen'
+      $result.blockers += "Unsent draft: $($_.Exception.Message)"
+    }
+  }
 } catch {
   $result.blockers += $_.Exception.Message
 } finally {
@@ -1700,3 +1823,4 @@ if ($TestWorkflowStep -and ($result.workflow_step_status -ne 'pass_one_loopback_
 if ($TestWorkflowReport -and $result.workflow_report_status -ne 'pass_native_markdown_rendered_and_checked_without_clipboard') { exit 1 }
 if ($TestFileTools -and $result.file_tool_status -ne 'pass_denial_create_read_no_clobber_journal') { exit 1 }
 if ($TestNativeConsent -and $result.native_consent_status -ne 'pass_sha_bound_read_no_create_read_no_clobber_and_read_mutation') { exit 1 }
+if ($TestDrafts -and $result.draft_status -ne 'pass_native_unsent_draft_recovered_exact_after_restart_and_locally_sent') { exit 1 }

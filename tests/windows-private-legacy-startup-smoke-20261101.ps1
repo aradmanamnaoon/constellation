@@ -53,6 +53,7 @@ function Start-PrivateApp([switch]$Resume) {
   $psi.WorkingDirectory=Split-Path $exe -Parent
   $psi.Arguments=$flag+' "'+$data+'"'
   $psi.UseShellExecute=$false
+  $psi.RedirectStandardError=$true
   $psi.EnvironmentVariables['TEMP']=Join-Path $qa 'Temp'
   $psi.EnvironmentVariables['TMP']=Join-Path $qa 'Temp'
   $psi.EnvironmentVariables['WEBVIEW2_USER_DATA_FOLDER']=Join-Path $qa 'WebView2'
@@ -83,6 +84,8 @@ function Start-PrivateApp([switch]$Resume) {
 }
 function Stop-PrivateApp($process) {
   if(-not $process.HasExited){$process.Kill();[void]$process.WaitForExit(5000)}
+  $diagnostics=$process.StandardError.ReadToEnd()
+  if($diagnostics.Trim()){Write-Output ('NATIVE_STARTUP_DIAGNOSTIC=' + $diagnostics.Trim())}
   $process.Dispose()
 }
 $first=Start-PrivateApp
@@ -96,7 +99,10 @@ $fixture=@'
 const fs=require("fs"),{DatabaseSync}=require("node:sqlite");
 const dbpath=process.argv[2],source=process.argv[3];
 if(!dbpath.includes("constellation-model-qa-")||!dbpath.endsWith("constellation.sqlite3"))throw Error("Not a disposable QA file");
-const ddl=fs.readFileSync(source,"utf8").split('const STORE_LEGACY_SCHEMA_DDL: &str = "')[1].split('";')[0];
+// Git Windows checkouts may use CRLF in Rust source; rustc interprets source
+// string literal newlines as LF. Normalize before feeding the DDL to SQLite,
+// or sqlite_master.sql will retain CRLF and fail strict schema attestation.
+const ddl=fs.readFileSync(source,"utf8").replace(/\r\n/g,"\n").split('const STORE_LEGACY_SCHEMA_DDL: &str = "')[1].split('";')[0];
 if(!ddl||!ddl.includes("CREATE TABLE IF NOT EXISTS rooms"))throw Error("Historic schema unavailable");
 const active=new DatabaseSync(dbpath);active.exec("PRAGMA wal_checkpoint(TRUNCATE)");active.close();
 for(const suffix of ["","-wal","-shm"]){

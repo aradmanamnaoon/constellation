@@ -22,5 +22,6 @@ pub use provider::{
     PreparedRequest, ProviderAdapter, ProviderKind, ProviderProfile,
 };
 pub use store::{
-    verify_initialized_schema, StudioStore, EVIDENCE_LIBRARY_DDL, PROPOSAL_BUDGET_DDL,
+    verify_initialized_schema, RoomDraft, StudioStore, EVIDENCE_LIBRARY_DDL, PROPOSAL_BUDGET_DDL,
+    ROOM_DRAFT_DDL,
 };

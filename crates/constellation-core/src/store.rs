@@ -5,20 +5,30 @@ use std::{
 };
 
 use rusqlite::{
-    params, Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior,
+    Connection, ErrorCode, OptionalExtension, Transaction, TransactionBehavior, params,
 };
-use serde::{de::DeserializeOwned, Serialize};
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::{Value, json};
 
 use crate::{
-    Agent, AgentId, CoreError, Event, EventKind, Message, MessageId, MessageSender, OperationId,
-    ProviderId, ProviderProfile, Result, Room, RoomId, StudioSnapshot, Task, TaskId, TaskState,
+    Agent, AgentId, CoreError, CredentialSource, Event, EventKind, Message, MessageId,
+    MessageSender, OperationId, ProviderId, ProviderProfile, Result, Room, RoomId, StudioSnapshot,
+    Task, TaskId, TaskState,
 };
 
 /// SQLite-backed studio state. Every mutation and its audit event are committed
 /// atomically. The mutex also makes this store safe to share across UI threads.
 pub struct StudioStore {
     connection: Mutex<Connection>,
+}
+
+/// Unsent text is local project data. Revisions prevent a stale editor/window
+/// from overwriting a more recent draft without explicit user intervention.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoomDraft {
+    pub room_id: RoomId,
+    pub content: String,
+    pub revision: i64,
 }
 
 /// The first explicitly versioned layout is byte-for-byte compatible with
@@ -118,6 +128,14 @@ pub const EVIDENCE_LIBRARY_DDL: &str = "CREATE TABLE IF NOT EXISTS evidence_sour
            source_bytes INTEGER NOT NULL CHECK (source_bytes > 0 AND source_bytes <= 131072)
          );";
 
+/// Optional, strictly recognized extension to the project database. Keeping
+/// this in the existing file means encrypted project archives include drafts.
+pub const ROOM_DRAFT_DDL: &str = "CREATE TABLE IF NOT EXISTS room_drafts (
+           room_id TEXT PRIMARY KEY NOT NULL REFERENCES rooms(id),
+           content TEXT NOT NULL CHECK (length(CAST(content AS BLOB)) <= 131072),
+           revision INTEGER NOT NULL CHECK (revision >= 1)
+         );";
+
 type SchemaObjects = Vec<(String, String, String)>;
 
 fn schema_objects(conn: &Connection) -> Result<SchemaObjects> {
@@ -140,7 +158,12 @@ fn known_schema() -> Result<SchemaObjects> {
     schema_objects(&reference)
 }
 
-fn known_schema_with_extensions(ddl: &str, budgets: bool, evidence: bool) -> Result<SchemaObjects> {
+fn known_schema_with_extensions(
+    ddl: &str,
+    budgets: bool,
+    evidence: bool,
+    drafts: bool,
+) -> Result<SchemaObjects> {
     let reference = Connection::open_in_memory()?;
     reference.execute_batch(ddl)?;
     if budgets {
@@ -148,6 +171,9 @@ fn known_schema_with_extensions(ddl: &str, budgets: bool, evidence: bool) -> Res
     }
     if evidence {
         reference.execute_batch(EVIDENCE_LIBRARY_DDL)?;
+    }
+    if drafts {
+        reference.execute_batch(ROOM_DRAFT_DDL)?;
     }
     schema_objects(&reference)
 }
@@ -169,16 +195,19 @@ fn schema_state(conn: &Connection) -> Result<bool> {
         }
         return Ok(true); // Fresh database; create known schema atomically.
     }
-    if present == known_schema()?
-        || present == known_schema_with_extensions(STORE_SCHEMA_DDL, true, false)?
-        || present == known_schema_with_extensions(STORE_SCHEMA_DDL, false, true)?
-        || present == known_schema_with_extensions(STORE_SCHEMA_DDL, true, true)?
-        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, false, false)?
-        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, true, false)?
-        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, false, true)?
-        || present == known_schema_with_extensions(STORE_LEGACY_SCHEMA_DDL, true, true)?
-    {
+    if present == known_schema()? {
         return Ok(version == 0); // Exact unversioned layout: version-only migration.
+    }
+    for ddl in [STORE_SCHEMA_DDL, STORE_LEGACY_SCHEMA_DDL] {
+        for budgets in [false, true] {
+            for evidence in [false, true] {
+                for drafts in [false, true] {
+                    if present == known_schema_with_extensions(ddl, budgets, evidence, drafts)? {
+                        return Ok(version == 0);
+                    }
+                }
+            }
+        }
     }
     Err(CoreError::UnrecognizedSchema)
 }
@@ -287,6 +316,100 @@ impl StudioStore {
         Ok(snapshot)
     }
 
+    /// Read persisted room drafts, including empty tombstones that retain CAS
+    /// revisions. Never infer a schema extension from table presence alone.
+    pub fn room_drafts(&self) -> Result<Vec<RoomDraft>> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+        verify_initialized_schema(&tx)?;
+        let has_table: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='room_drafts')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_table {
+            return Ok(Vec::new());
+        }
+        let drafts = {
+            let mut stmt =
+                tx.prepare("SELECT room_id, content, revision FROM room_drafts ORDER BY room_id")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?;
+            rows.map(|row| {
+                let (room_id, content, revision) = row?;
+                Ok(RoomDraft {
+                    room_id: room_id.parse().map_err(|_| {
+                        CoreError::InvalidInput("invalid saved draft room ID".into())
+                    })?,
+                    content,
+                    revision,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?
+        };
+        tx.commit()?;
+        Ok(drafts)
+    }
+
+    /// Save a draft using optimistic concurrency. The initial expected revision
+    /// is zero. A blank draft is persisted as a tombstone to avoid ABA races.
+    pub fn save_room_draft(
+        &self,
+        room_id: RoomId,
+        content: String,
+        expected_revision: i64,
+    ) -> Result<RoomDraft> {
+        if content.len() > 131_072 || !(0..i64::MAX).contains(&expected_revision) {
+            return Err(CoreError::InvalidInput(
+                "draft size or revision is invalid".into(),
+            ));
+        }
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        verify_initialized_schema(&tx)?;
+        ensure_id(&tx, "rooms", &room_id.to_string(), "room")?;
+        let has_table: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='room_drafts')",
+            [],
+            |row| row.get(0),
+        )?;
+        let current: Option<i64> = if has_table {
+            tx.query_row(
+                "SELECT revision FROM room_drafts WHERE room_id=?1",
+                [room_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+        } else {
+            None
+        };
+        if current.unwrap_or(0) != expected_revision {
+            return Err(CoreError::InvalidInput(
+                "draft changed in another window; review before overwriting".into(),
+            ));
+        }
+        if !has_table {
+            tx.execute_batch(ROOM_DRAFT_DDL)?;
+        }
+        let revision = expected_revision + 1;
+        tx.execute(
+            "INSERT INTO room_drafts (room_id, content, revision) VALUES (?1, ?2, ?3)
+             ON CONFLICT(room_id) DO UPDATE SET content=excluded.content, revision=excluded.revision",
+            params![room_id.to_string(), content, revision],
+        )?;
+        tx.commit()?;
+        Ok(RoomDraft {
+            room_id,
+            content,
+            revision,
+        })
+    }
+
     pub fn events(&self) -> Result<Vec<Event>> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
@@ -336,6 +459,7 @@ impl StudioStore {
             id: room_id,
             title,
             created_at_ms: now_ms(),
+            member_ids: None,
         };
         if id_exists(&tx, "rooms", &room_id.to_string())? {
             return Err(CoreError::AlreadyExists("room"));
@@ -349,6 +473,61 @@ impl StudioStore {
             operation_id,
             &fingerprint,
             EventKind::RoomCreated { room_id: room.id },
+            &room,
+        )?;
+        tx.commit()?;
+        Ok(room)
+    }
+
+    /// Persist room-level agent routing with optimistic stale-write detection.
+    /// The selection does not grant model, file or permission capabilities.
+    /// A legacy room has None; an explicitly empty selection is Some([]).
+    pub fn set_room_members(
+        &self,
+        room_id: RoomId,
+        member_ids: Vec<AgentId>,
+        expected_member_ids: Option<Vec<AgentId>>,
+        operation_id: OperationId,
+    ) -> Result<Room> {
+        if member_ids.len() > 8 {
+            return Err(CoreError::InvalidInput(
+                "room team cannot exceed eight agents".into(),
+            ));
+        }
+        let mut unique = std::collections::HashSet::new();
+        if !member_ids.iter().all(|id| unique.insert(*id)) {
+            return Err(CoreError::InvalidInput("duplicate room team agent".into()));
+        }
+        let fingerprint = json!({
+            "op":"set_room_members", "room_id":room_id,
+            "member_ids":member_ids, "expected_member_ids":expected_member_ids,
+        });
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(result) = previous_result::<Room>(&tx, operation_id, &fingerprint)? {
+            return Ok(result);
+        }
+        let mut room: Room =
+            read_one(&tx, "rooms", &room_id.to_string())?.ok_or(CoreError::NotFound("room"))?;
+        if room.member_ids != expected_member_ids {
+            return Err(CoreError::OperationConflict);
+        }
+        for agent_id in &member_ids {
+            ensure_id(&tx, "agents", &agent_id.to_string(), "agent")?;
+        }
+        room.member_ids = Some(member_ids.clone());
+        tx.execute(
+            "UPDATE rooms SET data=?2 WHERE id=?1",
+            params![room_id.to_string(), serde_json::to_string(&room)?],
+        )?;
+        record_event(
+            &tx,
+            operation_id,
+            &fingerprint,
+            EventKind::RoomMembersChanged {
+                room_id,
+                member_ids,
+            },
             &room,
         )?;
         tx.commit()?;
@@ -404,6 +583,64 @@ impl StudioStore {
         )?;
         tx.commit()?;
         Ok(agent)
+    }
+
+    /// Remove a never-used worker from the local roster without destroying
+    /// historical attribution. A saved room team, message or task referencing
+    /// the worker prevents removal. The native caller must independently
+    /// exclude saved workflows and active operations before entering here.
+    ///
+    /// The full expected agent is a compare-and-swap token: another window's
+    /// provider assignment or roster update cannot silently be discarded.
+    pub fn remove_unused_agent(&self, expected: Agent, operation_id: OperationId) -> Result<()> {
+        let fingerprint = json!({"op":"remove_unused_agent","expected":expected});
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if previous_result::<Agent>(&tx, operation_id, &fingerprint)?.is_some() {
+            return Ok(());
+        }
+        let current: Agent = read_one(&tx, "agents", &expected.id.to_string())?
+            .ok_or(CoreError::NotFound("agent"))?;
+        if current != expected {
+            return Err(CoreError::OperationConflict);
+        }
+        if read_table::<Room>(&tx, "rooms")?.iter().any(|room| {
+            room.member_ids
+                .as_ref()
+                .is_some_and(|ids| ids.contains(&expected.id))
+        }) {
+            return Err(CoreError::InvalidInput(
+                "remove this worker from all saved room teams first".into(),
+            ));
+        }
+        if read_table::<Message>(&tx, "messages")?
+            .iter()
+            .any(|message| message.sender == MessageSender::Agent(expected.id))
+        {
+            return Err(CoreError::InvalidInput(
+                "this worker authored messages; retain its identity for provenance".into(),
+            ));
+        }
+        if read_table::<Task>(&tx, "tasks")?
+            .iter()
+            .any(|task| task.agent_id == expected.id)
+        {
+            return Err(CoreError::InvalidInput(
+                "this worker owns saved tasks; retain its identity for provenance".into(),
+            ));
+        }
+        tx.execute("DELETE FROM agents WHERE id=?1", [expected.id.to_string()])?;
+        record_event(
+            &tx,
+            operation_id,
+            &fingerprint,
+            EventKind::AgentRemoved {
+                agent_id: expected.id,
+            },
+            &expected,
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Changes the preferred provider for one agent. There is no implicit
@@ -531,6 +768,86 @@ impl StudioStore {
         Ok(message)
     }
 
+    /// Save a human message and clear only its exact, revision-bound unsent
+    /// draft in ONE SQLite commit. Prevents the restart window where an
+    /// already-saved message reappears in the composer and can be resent.
+    /// The original operation ID makes uncertain IPC retries idempotent.
+    pub fn append_user_message_and_clear_draft(
+        &self,
+        message_id: MessageId,
+        room_id: RoomId,
+        content: String,
+        expected_draft_revision: i64,
+        operation_id: OperationId,
+    ) -> Result<Message> {
+        validate_text(&content, "message content")?;
+        if !(1..i64::MAX).contains(&expected_draft_revision) {
+            return Err(CoreError::InvalidInput(
+                "invalid saved draft revision".into(),
+            ));
+        }
+        let fingerprint = json!({
+            "op": "append_user_message_and_clear_draft",
+            "message_id": message_id,
+            "room_id": room_id,
+            "content": content,
+            "expected_draft_revision": expected_draft_revision,
+        });
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        verify_initialized_schema(&tx)?;
+        if let Some(previous) = previous_result::<Message>(&tx, operation_id, &fingerprint)? {
+            return Ok(previous);
+        }
+        ensure_id(&tx, "rooms", &room_id.to_string(), "room")?;
+        let existing: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT content, revision FROM room_drafts WHERE room_id=?1",
+                [room_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match existing {
+            Some((draft, revision))
+                if revision == expected_draft_revision && draft.trim() == content => {}
+            _ => return Err(CoreError::OperationConflict),
+        }
+        if id_exists(&tx, "messages", &message_id.to_string())? {
+            return Err(CoreError::AlreadyExists("message"));
+        }
+        let message = Message {
+            id: message_id,
+            room_id,
+            sender: MessageSender::User,
+            content,
+            created_at_ms: now_ms(),
+        };
+        tx.execute(
+            "INSERT INTO messages (id, room_id, data) VALUES (?1, ?2, ?3)",
+            params![
+                message.id.to_string(),
+                room_id.to_string(),
+                serde_json::to_string(&message)?
+            ],
+        )?;
+        record_event(
+            &tx,
+            operation_id,
+            &fingerprint,
+            EventKind::MessageAppended {
+                message_id: message.id,
+                room_id,
+            },
+            &message,
+        )?;
+        tx.execute(
+            "UPDATE room_drafts SET content='', revision=?1 WHERE room_id=?2",
+            params![expected_draft_revision + 1, room_id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(message)
+    }
+
     pub fn save_provider_profile(&self, profile: ProviderProfile) -> Result<()> {
         self.save_provider_profile_with_operation(profile, OperationId::new())
     }
@@ -560,6 +877,113 @@ impl StudioStore {
                 provider_id: profile.id,
             },
             &profile,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Remove only a credential-free, completely unused local provider. The
+    /// expected public profile is checked inside the same write transaction;
+    /// no saved agent, message or task may be orphaned. Other application
+    /// stores (such as workflows) must be checked by the native caller.
+    pub fn remove_unused_provider(
+        &self,
+        expected: ProviderProfile,
+        operation_id: OperationId,
+    ) -> Result<()> {
+        expected.validate()?;
+        if expected.credentials != CredentialSource::None {
+            return Err(CoreError::InvalidInput(
+                "only profiles without stored credentials may be removed".into(),
+            ));
+        }
+        let fingerprint = json!({"op":"remove_unused_provider", "expected":expected});
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if previous_result::<ProviderProfile>(&tx, operation_id, &fingerprint)?.is_some() {
+            return Ok(());
+        }
+        let current: ProviderProfile = read_one(&tx, "providers", &expected.id.to_string())?
+            .ok_or(CoreError::NotFound("provider"))?;
+        if current != expected {
+            return Err(CoreError::OperationConflict);
+        }
+        let agents: Vec<Agent> = read_table(&tx, "agents")?;
+        if agents
+            .iter()
+            .any(|agent| agent.provider_id == Some(expected.id))
+        {
+            return Err(CoreError::InvalidInput(
+                "an agent is still assigned to this provider".into(),
+            ));
+        }
+        // A conservative retention boundary: a provider could have been used
+        // as an explicit task/message route even without a current agent
+        // preference. Require a workspace with no task/message history.
+        for table in ["tasks", "messages"] {
+            if !read_table::<serde_json::Value>(&tx, table)?.is_empty() {
+                return Err(CoreError::InvalidInput(
+                    "the workspace contains task or message history; retain this provider for provenance".into(),
+                ));
+            }
+        }
+        tx.execute(
+            "DELETE FROM providers WHERE id=?1",
+            [expected.id.to_string()],
+        )?;
+        record_event(
+            &tx,
+            operation_id,
+            &fingerprint,
+            EventKind::ProviderRemoved {
+                provider_id: expected.id,
+            },
+            &expected,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Retire only the credential reference, not the provider's historical
+    /// identity. The native host separately deletes the OS vault entry first.
+    /// CAS prevents a stale settings window from silently modifying a revised
+    /// provider, and the existing immutable event ledger records the change.
+    pub fn forget_remembered_provider_credential(
+        &self,
+        expected: ProviderProfile,
+        operation_id: OperationId,
+    ) -> Result<()> {
+        expected.validate()?;
+        if !matches!(expected.credentials, CredentialSource::OsKeyring { .. }) {
+            return Err(CoreError::InvalidInput(
+                "the expected provider must have an OS-stored credential".into(),
+            ));
+        }
+        let mut retired = expected.clone();
+        retired.credentials = CredentialSource::None;
+        let fingerprint = json!({"op":"forget_remembered_provider_credential","expected":expected});
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if previous_result::<ProviderProfile>(&tx, operation_id, &fingerprint)?.is_some() {
+            return Ok(());
+        }
+        let current: ProviderProfile = read_one(&tx, "providers", &expected.id.to_string())?
+            .ok_or(CoreError::NotFound("provider"))?;
+        if current != expected {
+            return Err(CoreError::OperationConflict);
+        }
+        tx.execute(
+            "UPDATE providers SET data=?1 WHERE id=?2",
+            params![serde_json::to_string(&retired)?, retired.id.to_string()],
+        )?;
+        record_event(
+            &tx,
+            operation_id,
+            &fingerprint,
+            EventKind::ProviderSaved {
+                provider_id: retired.id,
+            },
+            &retired,
         )?;
         tx.commit()?;
         Ok(())
@@ -833,6 +1257,8 @@ fn read_one<T: DeserializeOwned>(
     id: &str,
 ) -> Result<Option<T>> {
     let sql = match table {
+        "rooms" => "SELECT data FROM rooms WHERE id = ?1",
+        "providers" => "SELECT data FROM providers WHERE id = ?1",
         "tasks" => "SELECT data FROM tasks WHERE id = ?1",
         "agents" => "SELECT data FROM agents WHERE id = ?1",
         _ => return Err(CoreError::InvalidInput("unknown table".into())),
@@ -903,6 +1329,84 @@ fn record_event<T: Serialize>(
 #[cfg(test)]
 mod historical_schema_startup_tests {
     use super::*;
+
+    #[test]
+    fn worker_removal_is_confirmed_idempotent_and_preserves_immutable_audit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("workers.sqlite3");
+        let store = StudioStore::open(&path).unwrap();
+        let agent = store.add_agent("Researcher", "Unused worker").unwrap();
+        let operation = OperationId::new();
+        let mut stale = agent.clone();
+        stale.name = "wrong name".into();
+        assert!(matches!(
+            store.remove_unused_agent(stale, OperationId::new()),
+            Err(CoreError::OperationConflict)
+        ));
+        assert_eq!(store.snapshot().unwrap().agents.len(), 1);
+        store.remove_unused_agent(agent.clone(), operation).unwrap();
+        store.remove_unused_agent(agent.clone(), operation).unwrap();
+        assert!(store.snapshot().unwrap().agents.is_empty());
+        assert!(matches!(
+            store.remove_unused_agent(agent.clone(), OperationId::new()),
+            Err(CoreError::NotFound("agent"))
+        ));
+        drop(store);
+        let reopened = StudioStore::open(&path).unwrap();
+        assert!(reopened.snapshot().unwrap().agents.is_empty());
+        let events = reopened.events().unwrap();
+        assert!(events.iter().any(|event| matches!(
+            event.kind, EventKind::AgentRemoved { agent_id } if agent_id == agent.id
+        )));
+    }
+
+    #[test]
+    fn worker_removal_rejects_saved_membership_history_and_task_owner() {
+        // Each restriction is checked in its own profile. A failed deletion
+        // must leave the agent and associated evidence unchanged.
+        for case in ["room", "message", "task"] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = StudioStore::open(dir.path().join("worker-safety.sqlite3")).unwrap();
+            let room = store.create_room("Research workspace").unwrap();
+            let agent = store.add_agent("Reviewer", "Worker with history").unwrap();
+            match case {
+                "room" => {
+                    store
+                        .set_room_members(room.id, vec![agent.id], None, OperationId::new())
+                        .unwrap();
+                }
+                "message" => {
+                    store
+                        .append_message(room.id, MessageSender::Agent(agent.id), "Saved response")
+                        .unwrap();
+                }
+                "task" => {
+                    store.create_task(room.id, agent.id, "Saved task").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(
+                    store.remove_unused_agent(agent.clone(), OperationId::new()),
+                    Err(CoreError::InvalidInput(_))
+                ),
+                "unexpected removal for {case}"
+            );
+            assert_eq!(store.snapshot().unwrap().agents, vec![agent.clone()]);
+            // Membership is a routing preference, so removing someone from
+            // the room safely permits roster deletion if no other history
+            // refers to that worker.
+            if case == "room" {
+                store
+                    .set_room_members(room.id, vec![], Some(vec![agent.id]), OperationId::new())
+                    .unwrap();
+                store
+                    .remove_unused_agent(agent, OperationId::new())
+                    .unwrap();
+                assert!(store.snapshot().unwrap().agents.is_empty());
+            }
+        }
+    }
 
     #[test]
     fn shipped_unversioned_profile_migrates_without_rewriting_schema_or_data() {
@@ -985,5 +1489,192 @@ mod historical_schema_startup_tests {
                 0
             );
         }
+    }
+
+    #[test]
+    fn drafts_survive_reopen_and_reject_stale_window_without_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("studio.sqlite3");
+        let store = StudioStore::open(&path).unwrap();
+        let room = store.create_room("Draft test").unwrap();
+        assert!(store.room_drafts().unwrap().is_empty());
+        let first = store
+            .save_room_draft(room.id, "Unsent text 🧪".into(), 0)
+            .unwrap();
+        assert_eq!(first.revision, 1);
+        drop(store);
+
+        let reopened = StudioStore::open(&path).unwrap();
+        assert_eq!(reopened.room_drafts().unwrap(), vec![first.clone()]);
+        let latest = reopened
+            .save_room_draft(room.id, "Updated locally".into(), 1)
+            .unwrap();
+        assert_eq!(latest.revision, 2);
+        assert!(matches!(
+            reopened.save_room_draft(room.id, "stale window".into(), 1),
+            Err(CoreError::InvalidInput(_))
+        ));
+        assert_eq!(reopened.room_drafts().unwrap(), vec![latest]);
+        let empty = reopened.save_room_draft(room.id, String::new(), 2).unwrap();
+        assert_eq!(empty.revision, 3);
+        assert!(matches!(
+            reopened.save_room_draft(room.id, "resurrected".into(), 0),
+            Err(CoreError::InvalidInput(_))
+        ));
+        drop(reopened);
+        assert_eq!(
+            StudioStore::open(&path).unwrap().room_drafts().unwrap(),
+            vec![empty]
+        );
+    }
+
+    #[test]
+    fn draft_size_or_unknown_room_rejected_and_schema_remains_strict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("drafts.sqlite3");
+        let store = StudioStore::open(&path).unwrap();
+        let room = store.create_room("Safety").unwrap();
+        assert!(matches!(
+            store.save_room_draft(RoomId::new(), "oops".into(), 0),
+            Err(CoreError::NotFound("room"))
+        ));
+        assert!(
+            store
+                .save_room_draft(room.id, "x".repeat(131_073), 0)
+                .is_err()
+        );
+        store.save_room_draft(room.id, "safe".into(), 0).unwrap();
+        drop(store);
+        let conn = Connection::open(&path).unwrap();
+        verify_initialized_schema(&conn).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER suspicious AFTER INSERT ON room_drafts BEGIN SELECT 1; END;",
+        )
+        .unwrap();
+        drop(conn);
+        assert!(matches!(
+            StudioStore::open(&path),
+            Err(CoreError::UnrecognizedSchema)
+        ));
+    }
+
+    #[test]
+    fn forgotten_credential_preserves_provider_identity_and_rejects_stale_profile() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = StudioStore::open(directory.path().join("provider.sqlite3")).unwrap();
+        let provider_id = ProviderId::new();
+        let previous = ProviderProfile {
+            id: provider_id,
+            display_name: "Test provider".into(),
+            model_id: "test-model".into(),
+            base_url: "https://example.com/v1".into(),
+            kind: Default::default(),
+            credentials: CredentialSource::OsKeyring {
+                service: "test-vault".into(),
+                account: provider_id.to_string(),
+            },
+        };
+        store.save_provider_profile(previous.clone()).unwrap();
+        let stale = ProviderProfile {
+            display_name: "wrong identity".into(),
+            ..previous.clone()
+        };
+        assert!(matches!(
+            store.forget_remembered_provider_credential(stale, OperationId::new()),
+            Err(CoreError::OperationConflict)
+        ));
+        let operation = OperationId::new();
+        store
+            .forget_remembered_provider_credential(previous.clone(), operation)
+            .unwrap();
+        store
+            .forget_remembered_provider_credential(previous.clone(), operation)
+            .unwrap();
+        let saved = store
+            .snapshot()
+            .unwrap()
+            .providers
+            .into_iter()
+            .find(|provider| provider.id == provider_id)
+            .unwrap();
+        assert_eq!(saved.credentials, CredentialSource::None);
+        assert_eq!(saved.display_name, previous.display_name);
+        assert_eq!(saved.model_id, previous.model_id);
+        assert!(matches!(
+            store.forget_remembered_provider_credential(previous, OperationId::new()),
+            Err(CoreError::OperationConflict)
+        ));
+    }
+
+    #[test]
+    fn local_send_clears_draft_in_same_transaction_and_replay_cannot_duplicate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("atomic-send.sqlite3");
+        let store = StudioStore::open(&path).unwrap();
+        let room = store.create_room("Atomic send").unwrap();
+        let draft = store
+            .save_room_draft(room.id, "  hello 🧪  ".into(), 0)
+            .unwrap();
+        let message_id = MessageId::new();
+        let operation = OperationId::new();
+        assert!(matches!(
+            store.append_user_message_and_clear_draft(
+                message_id,
+                room.id,
+                "hello 🧪".into(),
+                0,
+                operation,
+            ),
+            Err(CoreError::InvalidInput(_))
+        ));
+        assert_eq!(store.snapshot().unwrap().messages.len(), 0);
+        assert_eq!(store.room_drafts().unwrap(), vec![draft.clone()]);
+        let sent = store
+            .append_user_message_and_clear_draft(
+                message_id,
+                room.id,
+                "hello 🧪".into(),
+                draft.revision,
+                operation,
+            )
+            .unwrap();
+        assert_eq!(sent.id, message_id);
+        assert_eq!(sent.sender, MessageSender::User);
+        assert_eq!(store.snapshot().unwrap().messages, vec![sent.clone()]);
+        let cleared = store.room_drafts().unwrap();
+        assert_eq!(cleared[0].content, "");
+        assert_eq!(cleared[0].revision, draft.revision + 1);
+        drop(store);
+
+        let reopened = StudioStore::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .append_user_message_and_clear_draft(
+                    message_id,
+                    room.id,
+                    "hello 🧪".into(),
+                    draft.revision,
+                    operation,
+                )
+                .unwrap(),
+            sent
+        );
+        assert_eq!(reopened.snapshot().unwrap().messages, vec![sent]);
+        assert_eq!(reopened.room_drafts().unwrap(), cleared);
+        assert!(matches!(
+            reopened.append_user_message_and_clear_draft(
+                MessageId::new(),
+                room.id,
+                "hello 🧪".into(),
+                draft.revision,
+                OperationId::new(),
+            ),
+            Err(CoreError::OperationConflict)
+        ));
+        assert!(matches!(
+            reopened.save_room_draft(room.id, "resurrect".into(), draft.revision),
+            Err(CoreError::InvalidInput(_))
+        ));
+        assert_eq!(reopened.snapshot().unwrap().messages.len(), 1);
     }
 }

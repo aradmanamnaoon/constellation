@@ -1,5 +1,7 @@
 # Build artifacts and caches are never source-controlled.
 **/target/
+/target-linux/
+/target-android/
 **/node_modules/
 **/.svelte-kit/
 **/build/

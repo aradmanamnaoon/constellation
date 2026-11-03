@@ -110,11 +110,13 @@ mod tests {
                     id: first,
                     title: "Research <Lab>".into(),
                     created_at_ms: 1,
+                    member_ids: None,
                 },
                 Room {
                     id: other,
                     title: "Private".into(),
                     created_at_ms: 2,
+                    member_ids: None,
                 },
             ],
             agents: vec![Agent {
@@ -172,6 +174,7 @@ mod tests {
             id,
             title: "New room".into(),
             created_at_ms: 0,
+            member_ids: None,
         });
         let first = export_room_markdown(&snapshot, id).unwrap();
         let second = export_room_markdown(&snapshot, id).unwrap();

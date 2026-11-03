@@ -49,6 +49,22 @@ test('the generated Gradle wrapper is checksum pinned to the reviewed scaffold',
   assert.match(read('gradle/wrapper/gradle-wrapper.properties'), /distributionSha256Sum=9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14/);
 });
 
+test('production Android Gradle versions preserve API 37 and supported Kotlin pairing', () => {
+  const rootGradle = read('build.gradle.kts');
+  const buildSrc = read('buildSrc/build.gradle.kts');
+  const appGradle = read('app/build.gradle.kts');
+  const wrapper = read('gradle/wrapper/gradle-wrapper.properties');
+  assert.match(rootGradle, /classpath\("com\.android\.tools\.build:gradle:9\.3\.1"\)/);
+  assert.match(buildSrc, /implementation\("com\.android\.tools\.build:gradle:9\.3\.1"\)/);
+  assert.match(rootGradle, /classpath\("org\.jetbrains\.kotlin:kotlin-gradle-plugin:2\.4\.21"\)/);
+  assert.match(wrapper, /distributionUrl=.*gradle-9\.6\.1-bin\.zip/);
+  assert.match(appGradle, /compileSdk\s*=\s*37/);
+  assert.match(appGradle, /targetSdk\s*=\s*37/);
+  assert.match(appGradle, /minSdk\s*=\s*24/);
+  assert.match(read('gradle.properties'), /android\.builtInKotlin=false/);
+  assert.match(read('gradle.properties'), /android\.newDsl=false/);
+});
+
 test('mutated Android identifier or unexpectedly broadened permissions are rejected', () => {
   const manifest = read('app/src/main/AndroidManifest.xml');
   const injected = manifest.replace('android.permission.INTERNET', 'android.permission.READ_CONTACTS');
